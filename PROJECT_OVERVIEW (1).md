@@ -168,3 +168,59 @@ All data in Raphael is timestamped at ingestion and retained in the database acc
 **Time Series Charts**
 Any location can be queried for any indicator over any date range within the retention window. The result is displayed as an interactive line chart with a brushable time axis. Multiple indicators can be overlaid on the same chart with a dual-axis option for indicators with different units.
 
+**Month-on-Month Comparison**
+A comparison mode presents the same indicator for the same location across multiple years stacked on the same axis. This allows direct visual comparison of seasonal patterns across years — for example, comparing the PM2.5 profile for Delhi across June of 2022, 2023, and 2024 on a single chart.
+
+**Baseline Analysis**
+The user selects a reference period to serve as the baseline — for example, the first three months after a policy change or a tree plantation drive. The system computes the mean and standard deviation of each indicator during that period and plots subsequent readings as deviations from the baseline. This makes it easy to measure the environmental impact of an intervention.
+
+**Calendar Heatmap**
+A GitHub-style calendar heatmap displays the daily value of any indicator for any location over the past year. Each cell is color-coded according to the value's position in the observed range. This provides an immediate visual sense of seasonal patterns and anomalous days.
+
+**Correlation Explorer**
+A scatter plot view allows two indicators to be plotted against each other for a selected location and date range. A correlation coefficient is computed and displayed. This is used to explore relationships such as the connection between land surface temperature and PM2.5 concentration in a given zone.
+
+**Event Markers**
+Users can annotate the time axis with named events — policy changes, interventions, industrial events, natural events, or calendar events like festivals. Event markers appear on all trend charts for the annotated date, allowing visual inspection of whether an event corresponded to a change in environmental indicators.
+
+---
+
+### 4.6 Zone Comparison
+
+The comparison module allows multiple geographic zones to be analyzed side by side.
+
+**Split Map View**
+The map panel splits into two independent panels, each displaying a different zone. Layer toggles, time slider, and basemap selection apply independently to each panel. A synchronized mode locks both panels to the same time and zoom level.
+
+**Comparison Table**
+A structured table lists all available indicators as rows and all selected zones as columns. Each cell shows the current value, the 30-day trend direction, and a color band indicating severity. Up to four zones can be compared simultaneously.
+
+**Zone Ranking**
+The ranking view lists all administrative zones in the region sorted by any chosen indicator. Sorting is available for current value, 30-day change, risk score, and anomaly frequency. The list is color-coded by severity band and can be exported as a table.
+
+**Zone Health Scorecard**
+Each zone has a single-page scorecard view that summarizes all indicators, the AI risk score, the most recent alert activity, and the 90-day trend direction for each indicator. The scorecard is designed to be exported as part of a report.
+
+**Intervention Tracking**
+If an event marker has been placed in a zone, the scorecard shows a before-and-after comparison of all indicators relative to the event date. This is specifically designed for NGOs tracking the environmental impact of their interventions.
+
+---
+
+### 4.7 Report and PDF Export
+
+The report module generates structured, print-ready PDF documents from any combination of dashboard content.
+
+**Report Types**
+
+Zone Report: A complete environmental snapshot of a single zone. Includes a map image showing the zone with all active layers, a summary scorecard, trend charts for all indicators over the past 30 days, the current risk score with its explanation, and the most recent alerts.
+
+Comparison Report: Side-by-side documentation of two to four zones with a structured comparison table and individual scorecards.
+
+Alert Summary Report: A log of all alerts triggered within a specified date range, formatted as a table with metadata, and a summary section showing the most frequently triggered rules and locations.
+
+Trend Report: A detailed historical analysis of a single location. Includes all trend charts, the baseline deviation analysis, the calendar heatmap, and any event markers with before-and-after comparisons.
+
+Custom Report: The user selects which sections to include from a checklist. Any combination of the above components can be assembled into a single document.
+
+**Report Features**
+Reports include the organization name entered during setup, the Raphael version, and the date of generation. All data citations include the source name, the data type, and the timestamp of the most recent sync. Charts and map images are embedded directly. An auto-generated narrative paragraph summarizes the key findings in plain language for each section. Reports are available in A4 format and render cleanly for both digital sharing and print.
