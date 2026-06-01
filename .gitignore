@@ -1,0 +1,10 @@
+# Build and target directories
+src-tauri/binaries/
+src-tauri/target/
+backend/build/
+backend/dist/
+backend/mlruns/
+backend/api/__pycache__/
+backend/db/__pycache__/
+backend/ml/__pycache__/
+backend/reports/__pycache__/
