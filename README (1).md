@@ -47,3 +47,252 @@ Every data pull is timestamped and stored. Users query any location across any t
 
 **Alert and Notification System**
 Users define threshold-based alert rules per location and indicator. Alerts trigger as system tray notifications even when the application window is closed. All alerts are logged and exportable.
+
+**Zone Comparison**
+Up to four geographic zones can be placed side by side. A ranking engine sorts all zones by any indicator. Zone scorecards summarize all environmental dimensions per area.
+
+**Report and PDF Export**
+WeasyPrint generates structured, print-ready PDF documents from any combination of map snapshots, trend charts, risk scores, and alert logs. Reports include auto-generated narrative summaries derived from ML output.
+
+**Custom Data Import**
+Mage.ai provides a visual pipeline for importing field-collected data in CSV, GeoJSON, KML, Shapefile, and Excel formats. Imported data integrates into the same database and visualization system as API-sourced data.
+
+**Multi-User Access Control**
+Local user accounts with four roles: Administrator, Analyst, Field Worker, and Viewer. No cloud authentication required.
+
+**Offline-First Operation**
+All data, map tiles via PMTiles, and model outputs are stored locally via PostGIS or SpatiaLite. The application syncs when internet is available and operates fully from the local database when it is not.
+
+---
+
+## Who It Is Built For
+
+**NGO Field Workers**
+Identify intervention zones, generate grant reports, track environmental changes over time, receive alerts when conditions deteriorate in areas of concern.
+
+**City Planners and Government Officials**
+Monitor multiple zones simultaneously, compare environmental performance across wards or districts, produce evidence-based summaries for planning decisions.
+
+**General Public and Awareness Campaigns**
+Understand the environmental condition of a neighborhood, track trends, share data-backed findings with local authorities.
+
+---
+
+## Technology Foundation
+
+Raphael is assembled from established open-source tools. No component is built from scratch where a mature open-source solution exists.
+
+**Desktop Shell**
+Tauri v2 produces the native executable for Windows, Linux, and macOS. It manages the lifecycle of all background services and provides system tray integration.
+
+**Frontend**
+React with Vite as the build system. deck.gl and Kepler.gl handle all map rendering and data layer visualization. MapLibre GL JS provides the offline-capable base map served from local PMTiles archives. Apache ECharts renders all trend charts and data visualizations. shadcn/ui provides the component system. Framer Motion handles panel transitions. Zustand manages application state. TanStack Query handles all API communication.
+
+**Data Pipeline**
+Prefect orchestrates all scheduled data ingestion flows. One flow per data source handles extraction, validation, normalization, and database writes. Mage.ai provides the visual pipeline UI for custom data imports.
+
+**Intelligence Layer**
+scikit-learn provides clustering (KMeans), anomaly detection (IsolationForest), and risk scoring. Prophet handles time-series forecasting for air quality and temperature. MLflow tracks all model versions and experiment runs.
+
+**Geospatial Processing**
+Rasterio and GDAL process satellite GeoTIFF imagery for NDVI and LST layer derivation. Fiona and GeoPandas handle vector data. pyproj manages coordinate reprojection.
+
+**Database**
+PostGIS on PostgreSQL for hardware with 6GB or more RAM. SpatiaLite for hardware below that threshold. Both expose the same spatial SQL interface. The application selects automatically on first launch.
+
+**API**
+FastAPI serves all data to the frontend via a local REST interface bound exclusively to localhost.
+
+**Reports**
+WeasyPrint renders HTML Jinja2 templates to PDF. Playwright captures map snapshots for embedding in reports.
+
+---
+
+## Open Data Sources
+
+Raphael uses exclusively free, publicly available data. No commercial data subscription is required.
+
+| Category | Sources |
+|---|---|
+| Air Quality | OpenAQ, WAQI, IQAir AirVisual, CPCB (India), Copernicus CAMS |
+| Satellite Imagery | NASA Earthdata MODIS/VIIRS, Copernicus Sentinel-2, USGS Earth Explorer, Google Earth Engine |
+| Fire and Heat | NASA FIRMS, NASA LANCE |
+| Weather and Climate | Open-Meteo, NOAA GFS, ERA5 via Copernicus CDS, OpenWeatherMap |
+| Vegetation | MODIS NDVI, Sentinel-2 NDVI, Global Forest Watch, Hansen Global Forest Change |
+| Urban and Geospatial | OpenStreetMap Overpass, GADM, WorldPop, GHSL, NASA SEDAC, Datameet |
+| Hazard and Disaster | GDACS, FloodMap, FEMA, EM-DAT, NOAA NCEI |
+
+Full details including endpoints, authentication requirements, update frequencies, and data formats are in `docs/DATA_SOURCES.md`.
+
+---
+
+## Repository Structure
+
+```
+raphael/
+|-- src-tauri/                     # Tauri desktop shell (Rust)
+|   |-- src/
+|   |   |-- main.rs
+|   |   |-- sidecar.rs             # Service lifecycle manager
+|   |   `-- tray.rs                # System tray
+|   |-- binaries/                  # Sidecar executables
+|   |-- icons/
+|   |-- Cargo.toml
+|   `-- tauri.conf.json
+|
+|-- src/                           # React frontend
+|   |-- components/
+|   |   |-- ui/                    # shadcn base components
+|   |   |-- map/                   # deck.gl + MapLibre components
+|   |   |-- charts/                # Apache ECharts wrappers
+|   |   |-- panels/                # Dashboard panels
+|   |   `-- layout/                # Shell layout
+|   |-- views/                     # Page-level views
+|   |-- store/                     # Zustand stores
+|   |-- api/                       # TanStack Query hooks
+|   |-- i18n/                      # Translation files (en, hi, mr, fr, sw)
+|   |-- types/
+|   |-- App.tsx
+|   `-- main.tsx
+|
+|-- backend/                       # Python backend
+|   |-- api/                       # FastAPI application
+|   |   |-- main.py
+|   |   |-- routes/
+|   |   |-- models/
+|   |   |-- deps.py
+|   |   `-- auth.py
+|   |-- db/                        # SQLAlchemy + Alembic
+|   |   |-- connection.py
+|   |   |-- models.py
+|   |   |-- queries.py
+|   |   `-- migrations/
+|   |-- ingestion/                 # Prefect flows
+|   |   |-- flows/
+|   |   |   |-- aq_openaq.py
+|   |   |   |-- aq_waqi.py
+|   |   |   |-- aq_iqair.py
+|   |   |   |-- aq_cams.py
+|   |   |   |-- weather_openmeteo.py
+|   |   |   |-- weather_noaa_gfs.py
+|   |   |   |-- weather_openweathermap.py
+|   |   |   |-- fire_firms.py
+|   |   |   |-- fire_lance.py
+|   |   |   |-- lst_modis.py
+|   |   |   |-- ndvi_sentinel.py
+|   |   |   |-- ndvi_modis.py
+|   |   |   |-- ndvi_gfw.py
+|   |   |   |-- ndvi_hansen.py
+|   |   |   |-- boundaries_gadm.py
+|   |   |   |-- osm_features.py
+|   |   |   |-- urban_ghsl.py
+|   |   |   |-- pop_worldpop.py
+|   |   |   |-- hazard_gdacs.py
+|   |   |   |-- hazard_emdat.py
+|   |   |   |-- hazard_noaa_ncei.py
+|   |   |   |-- hazard_fema.py
+|   |   |   `-- sedac_socioeco.py
+|   |   |-- scheduler.py
+|   |   `-- base.py
+|   |-- processing/
+|   |   |-- raster.py              # Rasterio pipelines
+|   |   |-- normalize.py
+|   |   |-- validate.py
+|   |   `-- import_pipeline.py
+|   |-- ml/
+|   |   |-- forecast.py            # Prophet
+|   |   |-- anomaly.py             # IsolationForest
+|   |   |-- clustering.py          # KMeans
+|   |   |-- risk_score.py
+|   |   |-- explainer.py
+|   |   `-- runner.py
+|   |-- reports/
+|   |   |-- generator.py
+|   |   |-- renderer.py            # WeasyPrint + Playwright
+|   |   |-- templates/
+|   |   `-- narrative.py
+|   `-- config.py
+|
+|-- mage/                          # Mage.ai custom import pipelines
+|   |-- pipelines/
+|   |   |-- csv_import/
+|   |   |-- geojson_import/
+|   |   |-- kml_import/
+|   |   |-- shapefile_import/
+|   |   `-- excel_import/
+|   `-- custom/
+|
+|-- config/
+|   |-- app.toml
+|   |-- datasources.toml
+|   `-- ml.toml
+|
+|-- data/
+|   |-- tiles/                     # PMTiles offline map bundles
+|   |-- boundaries/                # GADM files
+|   `-- raphael.db                 # SpatiaLite database
+|
+|-- docs/
+|   |-- PROJECT_OVERVIEW.md
+|   |-- SYSTEM_ARCHITECTURE.md
+|   |-- TECHNICAL_SPECIFICATION.md
+|   `-- DATA_SOURCES.md
+|
+|-- scripts/
+|   |-- build.sh
+|   |-- package.sh
+|   `-- seed.py
+|
+|-- tests/
+|-- package.json
+|-- vite.config.ts
+|-- tsconfig.json
+|-- tailwind.config.ts
+|-- pyproject.toml
+`-- .github/workflows/build.yml
+```
+
+---
+
+## Documentation Index
+
+| Document | Description |
+|---|---|
+| `docs/PROJECT_OVERVIEW.md` | Complete feature module breakdown, user flows, design decisions |
+| `docs/SYSTEM_ARCHITECTURE.md` | Subsystem design, data flow diagrams, component interaction, tool configuration |
+| `docs/TECHNICAL_SPECIFICATION.md` | Full dependency list, database schema, API contracts, ML specs, build instructions |
+| `docs/DATA_SOURCES.md` | All open data sources with endpoints, authentication, coverage, and flow mapping |
+
+---
+
+## System Requirements
+
+**Minimum**
+- OS: Windows 10, Ubuntu 20.04, macOS 11
+- Processor: Dual-core x86-64, 1.8 GHz
+- Memory: 4 GB RAM
+- Storage: 10 GB available
+- Display: 1280 x 720
+
+**Recommended**
+- Processor: Quad-core 2.5 GHz or higher
+- Memory: 8 GB RAM
+- Storage: 50 GB SSD
+- Display: 1920 x 1080
+
+**Network**
+- Required only for initial setup and periodic sync
+- All features function without network after first sync
+- Minimum viable sync requires approximately 200 MB per region per cycle
+
+---
+
+## Getting Started
+
+A demo mode is available on first launch that loads pre-seeded data for a sample region, allowing the full interface to be explored without completing a live sync. Full setup instructions including region selection, API key configuration, and initial data sync are in `docs/PROJECT_OVERVIEW.md`.
+
+---
+
+## License
+
+Raphael is released under the MIT License.
