@@ -111,3 +111,60 @@ A time control bar runs across the top of the map. It spans from 7 days in the p
 **Basemap Controls**
 A basemap selector in the layer panel provides thumbnail previews of each style. A compass indicator shows current map orientation with a reset-to-north button. A zoom control and a locate-to-region button are fixed on the map edge. The current coordinate, zoom level, and elevation at the map center are displayed at the bottom of the map.
 
+---
+
+### 4.3 AI Predictions and Forecasting
+
+The forecasting module runs automatically after each data sync and is accessible from the Risk Intelligence section of the sidebar.
+
+**Air Quality Forecast**
+A time-series forecasting model is trained on the historical AQ data for the selected region. It produces a 48-hour forward prediction for PM2.5 concentration at each monitoring station location, with an 80% confidence interval band. The output is displayed as a chart with the historical trace on the left and the forecast trace on the right, with the confidence band shown as a shaded region.
+
+**Land Surface Temperature Forecast**
+A similar model operates on historical LST data combined with weather forecast inputs. It produces a 72-hour temperature prediction for the region shown as a spatial heatmap snapshot at 6-hour intervals.
+
+**Pollution Spike Prediction**
+A classification model scans the AQ forecast output for predicted exceedance events — moments where concentration is forecast to cross a user-defined threshold. These events are surfaced as a timeline of upcoming high-risk windows in the next 24 hours, with the probability of exceedance shown for each.
+
+**Composite Risk Score**
+A weighted scoring algorithm computes a 0 to 100 risk score for each geographic zone in the region. The score combines LST, AQ, NDVI, and precipitation inputs using weights that are configurable by the administrator. The score is updated after each intelligence cycle and displayed as a layer on the map and as a card in the city overview panel.
+
+**Anomaly Detection**
+An unsupervised anomaly detection model runs continuously on incoming data. It flags readings that deviate significantly from the expected range for that location, time of day, and season. Flagged anomalies trigger alert notifications and appear as marked events on the trend charts.
+
+**Explainability Output**
+Every forecast and score is accompanied by a plain-language explanation generated from the model's feature importance output. The explanation lists the top contributing factors and their direction of influence. For example: "Risk score elevated due to land surface temperature 6.2 degrees above seasonal baseline and PM2.5 concentration in the upper quartile for this zone."
+
+---
+
+### 4.4 Alert and Notification System
+
+The alert module operates as a background process and does not require the application window to be open.
+
+**Alert Rule Configuration**
+Users create alert rules by specifying a location (either a point, a named zone, or a drawn polygon), an indicator (any of the nine data layers), a comparison operator (above, below, or change by), and a threshold value. Multiple rules can be combined with AND or OR logic. Rules can be scoped to specific time windows such as business hours only or nighttime only.
+
+**Alert Delivery**
+When a rule condition is satisfied, a system tray notification appears. The notification includes the rule name, the current value that triggered it, the threshold that was set, and the location. Clicking the notification opens the application window focused on the triggering location.
+
+**Alert Severity**
+Rules are assigned a severity level of Informational, Warning, or Critical. The severity determines the color of the notification and its position in the alert log.
+
+**Alert History**
+All triggered alerts are stored in the database with full metadata. The alert log view displays all historical alerts with filtering by date range, severity, indicator, and location. The entire log or any filtered subset can be exported as a structured CSV file.
+
+**Scheduled Digest**
+A daily or weekly digest view aggregates all alerts from the period into a single summary screen, showing which zones triggered the most alerts, which indicators were most frequently exceeded, and the trend direction for each.
+
+**Geofenced Alerts**
+Alert rules can be scoped to a geographic radius around a point. This allows field workers to monitor only the areas relevant to their assignment without being notified about conditions elsewhere in the region.
+
+---
+
+### 4.5 Historical Trend Analysis
+
+All data in Raphael is timestamped at ingestion and retained in the database according to the retention policy set by the administrator. The default retention period is two years.
+
+**Time Series Charts**
+Any location can be queried for any indicator over any date range within the retention window. The result is displayed as an interactive line chart with a brushable time axis. Multiple indicators can be overlaid on the same chart with a dual-axis option for indicators with different units.
+
