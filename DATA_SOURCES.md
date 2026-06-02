@@ -592,3 +592,122 @@ Notes: GDACS is operated jointly by the United Nations and the European Commissi
 | Raphael layer | Historical Hazard Events (event markers on timeline) |
 | Prefect flow | hazard_emdat.py |
 | Schedule | Every 7 days |
+
+Notes: EM-DAT records are used to populate historical event markers on the time slider. When a user drags the time slider to a date with a recorded disaster event in the region, an event marker appears on the map.
+
+---
+
+### 6.4 NOAA NCEI — National Centers for Environmental Information
+
+| Property | Value |
+|---|---|
+| Data type | Global climate and weather event archive |
+| Parameters | Extreme heat events, heavy precipitation, storm records, drought indices |
+| Coverage | Global |
+| Update frequency | Daily |
+| Historical depth | 1800s to present |
+| Base URL | https://www.ncei.noaa.gov/access/services/data/v1 |
+| Authentication | None |
+| Data format | JSON, CSV |
+| Raphael layer | Historical Climate Events |
+| Prefect flow | hazard_noaa_ncei.py |
+| Schedule | Every 7 days |
+
+---
+
+## 7. Complete Source Summary
+
+| Source | Category | Layer | Frequency | Auth Required | Registration |
+|---|---|---|---|---|---|
+| OpenAQ v3 | Air Quality | AQ | 1 hour | No | No |
+| WAQI | Air Quality | AQ | 1 hour | API key | Free |
+| IQAir AirVisual | Air Quality | AQ | 1 hour | API key | Free |
+| Copernicus CAMS | Air Quality | AQ | 6 hours | Account | Free |
+| CPCB (via OpenAQ) | Air Quality | AQ | 15 min | No | No |
+| Open-Meteo | Weather | Weather/Precip | 1 hour | No | No |
+| NOAA GFS | Weather | Weather | 6 hours | No | No |
+| OpenWeatherMap | Weather | Weather | 1 hour | API key | Free |
+| Copernicus ERA5 | Climate | Historical | 24 hours | Account | Free |
+| NASA FIRMS | Fire | Fire/Heat | 3 hours | MAP key | Free |
+| NASA LANCE | Fire | Fire/Heat | 3 hours | Account | Free |
+| NASA MODIS LST | Satellite | LST | Daily | Account | Free |
+| NASA MODIS NDVI | Satellite | NDVI | 16 days | Account | Free |
+| Copernicus Sentinel-2 | Satellite | NDVI | 5 days | OAuth2 | Free |
+| USGS Earth Explorer | Satellite | NDVI/LST | On demand | Account | Free |
+| Google Earth Engine | Satellite | Custom | On demand | Account | Free |
+| Global Forest Watch | Vegetation | NDVI | 7 days | API key | Free |
+| Hansen Forest Change | Vegetation | NDVI | Annual | No | No |
+| GADM | Geospatial | Boundaries | 2 years | No | No |
+| OSM Overpass | Geospatial | Urban | 7 days | No | No |
+| GHSL | Geospatial | Urban | Annual | No | No |
+| WorldPop | Geospatial | Population | Annual | No | No |
+| NASA SEDAC | Geospatial | Socioeconomic | Annual | Account | Free |
+| Datameet | Geospatial | Boundaries (India) | Annual | No | No |
+| GDACS | Hazard | Hazard Alerts | 1 hour | No | No |
+| FEMA Flood | Hazard | Flood Risk (US) | 30 days | No | No |
+| EM-DAT | Hazard | Historical Events | 7 days | Account | Free |
+| NOAA NCEI | Hazard | Climate Events | 7 days | No | No |
+
+---
+
+## 8. Offline Fallback Strategy
+
+```
+Data request comes in
+      |
+      v
+Is network available?
+      |
+      +-- YES --> Fetch from source API
+      |                 |
+      |           Success? --> Write to DB, update last_synced_at
+      |                 |
+      |           Failure? --> Retry x3 with exponential backoff
+      |                         |
+      |                   Still failing? --> Log error, increment error_count
+      |                                      Surface sync warning in UI
+      |
+      +-- NO  --> Read last cached value from DB
+                        |
+                  How old is the cache?
+                        |
+                  < 6 hours   --> Use cache, show "last synced X ago"
+                  6-24 hours  --> Use cache, show staleness warning badge
+                  > 24 hours  --> Show data gap indicator on layer panel
+                  No data     --> Disable layer, show "no data available"
+```
+
+All layer panels display a timestamp showing when data was last updated. Stale data uses a muted visual treatment. The sync status panel in settings shows the last sync time and error count for every source individually.
+
+---
+
+## 9. Data Licensing
+
+| Source | License | Commercial Use |
+|---|---|---|
+| OpenAQ | CC BY 4.0 | Yes, with attribution |
+| WAQI | Custom open license | Non-commercial only |
+| IQAir | Commercial restrictions | Non-commercial only |
+| Copernicus CAMS | Copernicus License | Yes, with attribution |
+| Open-Meteo | CC BY 4.0 | Yes, with attribution |
+| NOAA GFS | Public Domain | Yes |
+| ERA5 | Copernicus License | Yes, with attribution |
+| NASA FIRMS | Public Domain (US Gov) | Yes |
+| NASA LANCE | Public Domain (US Gov) | Yes |
+| NASA MODIS | Public Domain (US Gov) | Yes |
+| Sentinel-2 | Copernicus Open Access | Yes, with attribution |
+| USGS Landsat | Public Domain (US Gov) | Yes |
+| Global Forest Watch | CC BY 4.0 | Yes, with attribution |
+| Hansen Forest Change | CC BY 4.0 | Yes, with attribution |
+| GADM | CC BY 4.0 (non-commercial) | No |
+| OpenStreetMap | ODbL | Yes, with attribution |
+| GHSL | JRC Open Data License | Yes, with attribution |
+| WorldPop | CC BY 4.0 | Yes, with attribution |
+| NASA SEDAC | CC BY 4.0 | Yes, with attribution |
+| Datameet | CC BY | Yes, with attribution |
+| GDACS | Non-commercial | No |
+| FEMA | Public Domain (US Gov) | Yes |
+| EM-DAT | Research license | Non-commercial |
+| NOAA NCEI | Public Domain (US Gov) | Yes |
+
+Raphael is a non-commercial, open-source platform. All sources are used within their respective license terms. Applications derived from Raphael for commercial purposes must independently review the WAQI, IQAir, GADM, GDACS, and EM-DAT licenses before deployment.
