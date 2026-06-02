@@ -235,3 +235,122 @@ GET /area/csv/{map_key}/MODIS_NRT/{bbox}/1
 
 | Property | Value |
 |---|---|
+| Data type | Near real-time satellite products including fire, LST, aerosols |
+| Parameters | Fire detections, land surface temperature, aerosol optical depth |
+| Coverage | Global |
+| Update frequency | Within 3 hours of satellite overpass |
+| Base URL | https://lance.modaps.eosdis.nasa.gov |
+| Authentication | NASA Earthdata account token |
+| Data format | HDF4, GeoTIFF |
+| Raphael layer | Fire and Heat Anomalies (LANCE is backup for FIRMS) |
+| Prefect flow | fire_lance.py |
+| Schedule | Every 3 hours |
+
+---
+
+### 3.3 NASA Earthdata — MODIS Land Surface Temperature (MOD11A1)
+
+| Property | Value |
+|---|---|
+| Data type | Land surface temperature derived from thermal infrared |
+| Parameters | Daytime LST, nighttime LST, QC flags |
+| Coverage | Global |
+| Resolution | 1 km |
+| Update frequency | Daily |
+| Historical depth | 2000 onwards |
+| Base URL | https://cmr.earthdata.nasa.gov/search |
+| Authentication | Free NASA Earthdata account at urs.earthdata.nasa.gov |
+| Data format | HDF4, GeoTIFF (via AppEEARS or direct download) |
+| Raphael layer | Land Surface Temperature |
+| Prefect flow | lst_modis.py |
+| Schedule | Daily |
+
+Processing steps after download:
+```
+1. Rasterio reads HDF4 LST_Day_1km band
+2. Apply scale factor: LST_celsius = (raw * 0.02) - 273.15
+3. Reproject to EPSG:4326 using pyproj
+4. Clip to region bounding box
+5. Apply plasma colormap via matplotlib
+6. Export as PNG tile
+7. Write tile metadata to raster_tiles table
+```
+
+---
+
+### 3.4 NASA Earthdata — MODIS NDVI (MOD13A2)
+
+| Property | Value |
+|---|---|
+| Data type | Normalized Difference Vegetation Index |
+| Parameters | NDVI, EVI (Enhanced Vegetation Index) |
+| Coverage | Global |
+| Resolution | 1 km (MOD13A2), 250 m (MOD13Q1) |
+| Update frequency | 16-day composite (minimizes cloud contamination) |
+| Historical depth | 2000 onwards |
+| Authentication | Same NASA Earthdata account |
+| Data format | HDF4, GeoTIFF |
+| Raphael layer | NDVI Green Cover (standard resolution) |
+| Prefect flow | ndvi_modis.py |
+| Schedule | Every 16 days |
+
+---
+
+### 3.5 Copernicus Sentinel-2 (NDVI)
+
+| Property | Value |
+|---|---|
+| Data type | Multispectral satellite imagery at 10 m resolution |
+| Parameters | Band 4 (Red), Band 8 (NIR) for NDVI; Band 11, 12 for built-up index |
+| Coverage | Global |
+| Resolution | 10 meters |
+| Update frequency | Every 5 days |
+| Historical depth | 2015 onwards |
+| Base URL | https://services.sentinel-hub.com |
+| Authentication | Free account + OAuth2 client credentials at sentinelhub.com |
+| Data format | GeoTIFF |
+| Raphael layer | NDVI Green Cover (high resolution) |
+| Prefect flow | ndvi_sentinel.py |
+| Schedule | Every 5 days |
+
+NDVI formula: `NDVI = (B08 - B04) / (B08 + B04)`
+Value range: -1 (water, bare soil) to +1 (dense vegetation). Urban: 0.0–0.2, Parks: 0.4–0.8.
+
+---
+
+### 3.6 USGS Earth Explorer — Landsat Archive
+
+| Property | Value |
+|---|---|
+| Data type | Multispectral satellite imagery, historical archive |
+| Parameters | All Landsat 5/7/8/9 bands; LST, NDVI derivable |
+| Coverage | Global |
+| Resolution | 30 meters |
+| Update frequency | 16-day repeat cycle |
+| Historical depth | 1972 onwards — the longest continuous satellite record |
+| Base URL | https://m2m.cr.usgs.gov/api/api/json/stable |
+| Authentication | Free USGS account at earthexplorer.usgs.gov |
+| Data format | GeoTIFF |
+| Raphael layer | NDVI and LST historical (deep archive, on-demand) |
+| Prefect flow | imagery_usgs.py |
+| Schedule | On demand for historical analysis requests |
+
+Notes: Landsat is the primary source for historical trend analysis going back beyond 2000. Used when users request multi-decade environmental comparisons or when the Historical Trend view queries data older than what MODIS covers.
+
+---
+
+### 3.7 Google Earth Engine
+
+| Property | Value |
+|---|---|
+| Data type | Planetary-scale geospatial analysis platform |
+| Parameters | Access to entire Landsat + Sentinel + MODIS archive with server-side compute |
+| Coverage | Global |
+| Base URL | https://earthengine.googleapis.com |
+| Authentication | Free account for research. Register at earthengine.google.com |
+| Data format | GeoTIFF export, Map tiles |
+| Raphael layer | On-demand analysis layer for custom queries |
+| Prefect flow | imagery_gee.py (optional, activated from settings) |
+
+Notes: Google Earth Engine is optional and used for advanced on-demand analysis. It allows server-side computation over the full satellite archive without downloading raw files. Useful for generating custom historical composites when a user defines a specific analysis period and area.
+
