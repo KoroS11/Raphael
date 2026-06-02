@@ -354,3 +354,122 @@ Notes: Landsat is the primary source for historical trend analysis going back be
 
 Notes: Google Earth Engine is optional and used for advanced on-demand analysis. It allows server-side computation over the full satellite archive without downloading raw files. Useful for generating custom historical composites when a user defines a specific analysis period and area.
 
+---
+
+## 4. Vegetation and Green Cover
+
+### 4.1 Global Forest Watch (GFW)
+
+| Property | Value |
+|---|---|
+| Data type | Deforestation alerts and tree cover loss |
+| Parameters | Forest cover percentage, tree cover loss area, GLAD alerts, integrated deforestation alerts |
+| Coverage | Global tropical and subtropical forests |
+| Update frequency | Weekly (GLAD alerts), annual (tree cover loss) |
+| Base URL | https://data-api.globalforestwatch.org |
+| Authentication | Free API key. Register at globalforestwatch.org |
+| Data format | GeoJSON, GeoTIFF |
+| Raphael layer | NDVI Green Cover — deforestation alert overlay |
+| Prefect flow | ndvi_gfw.py |
+| Schedule | Every 7 days |
+
+Key endpoint:
+```
+GET /dataset/umd_glad_alerts/latest/query
+    ?geometry={geojson}&sql=SELECT+date,confidence,area__ha
+```
+
+---
+
+### 4.2 Hansen Global Forest Change
+
+| Property | Value |
+|---|---|
+| Data type | Annual global forest cover loss and gain |
+| Parameters | Tree canopy cover (2000 baseline), forest loss year, forest gain |
+| Coverage | Global forests |
+| Resolution | 30 meters (Landsat-derived) |
+| Update frequency | Annual |
+| Historical depth | 2000 to present |
+| Base URL | https://storage.googleapis.com/earthenginepartners-hansen |
+| Authentication | None. Direct GeoTIFF download |
+| Data format | GeoTIFF |
+| Raphael layer | NDVI Green Cover — long-term forest change layer |
+| Prefect flow | ndvi_hansen.py |
+| Schedule | Annual (checks for new version each year) |
+
+Notes: The Hansen dataset is the global standard for tracking long-term forest cover change. It is processed once per region and stored as a raster tile showing cumulative forest loss since 2000.
+
+---
+
+## 5. Urban and Geospatial Data
+
+### 5.1 GADM — Global Administrative Areas
+
+| Property | Value |
+|---|---|
+| Data type | Administrative boundary polygons, all countries, all levels |
+| Coverage | Every country globally |
+| Update frequency | Major releases every 2-3 years |
+| Base URL | https://geodata.ucdavis.edu/gadm |
+| Authentication | None |
+| Data format | GeoPackage (.gpkg), Shapefile, GeoJSON |
+| Raphael layer | Administrative Boundaries |
+| Prefect flow | boundaries_gadm.py |
+| Schedule | One-time per region on setup, checks for updates annually |
+
+Administrative levels:
+```
+Level 0: Country boundary
+Level 1: State / Province
+Level 2: District / County
+Level 3: Sub-district / Tehsil
+Level 4: Village / Ward (where available)
+```
+
+---
+
+### 5.2 OpenStreetMap — Overpass API
+
+| Property | Value |
+|---|---|
+| Data type | Community-maintained geospatial features |
+| Parameters | Parks, forests, water bodies, industrial areas, residential zones, roads |
+| Coverage | Global |
+| Update frequency | Near real-time (community maintained) |
+| Base URL | https://overpass-api.de/api/interpreter |
+| Authentication | None |
+| Data format | JSON, XML |
+| Raphael layer | Urban features context layer |
+| Prefect flow | osm_features.py |
+| Schedule | Every 7 days |
+
+Sample Overpass QL queries used:
+```
+// Parks and green spaces
+[out:json][timeout:25];
+(way["leisure"="park"]({bbox});
+ way["landuse"="forest"]({bbox});
+ way["natural"="wood"]({bbox}););
+out body geom;
+
+// Industrial zones
+[out:json][timeout:25];
+(way["landuse"="industrial"]({bbox});
+ way["landuse"="commercial"]({bbox}););
+out body geom;
+```
+
+---
+
+### 5.3 Global Human Settlement Layer (GHSL)
+
+| Property | Value |
+|---|---|
+| Data type | Built-up area extent and urban density classification |
+| Parameters | Built-up surface fraction, degree of urbanisation, settlement type |
+| Coverage | Global |
+| Resolution | 100 m and 10 m |
+| Update frequency | Every 3 years |
+| Historical depth | 1975 onwards (Landsat archive) |
+| Base URL | https://ghsl.jrc.ec.europa.eu/download.php |
