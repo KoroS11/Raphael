@@ -584,3 +584,121 @@ def run_intelligence_cycle(region_id: str = None):
             WHERE model_type = 'risk_score'
             ORDER BY value DESC LIMIT 5
         """)).fetchall()
+
+        for zone_row in top_zones:
+            zone_id = str(zone_row.zone_id)
+            for layer in ["aq", "lst"]:
+                train_and_forecast(db, zone_id, layer)
+
+        # 5. Generate AI insights
+        insights = generate_ai_insights(db, region_id)
+        log.info("ai_insights_generated", count=len(insights))
+
+        log.info("intelligence_cycle_complete", region_id=region_id[:8])
+        return {"status": "complete", "insights": insights}
+
+    except Exception as e:
+        log.error("intelligence_cycle_failed", error=str(e))
+        raise
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    run_intelligence_cycle()
+```
+
+---
+
+## Step 8 — Add ML Endpoints to FastAPI
+
+Add to `backend/api/routes/layers.py`:
+
+```python
+@router.get("/composite/risk")
+async def get_risk_scores(
+    region_id: str = Query(...),
+    db: Session = Depends(get_db),
+    _user = Depends(get_current_user)
+):
+    from db.models import MLOutput, ZoneGeometry
+    rows = (
+        db.query(MLOutput, ZoneGeometry)
+        .join(ZoneGeometry, MLOutput.zone_id == ZoneGeometry.id)
+        .filter(
+            MLOutput.model_type == "risk_score",
+            ZoneGeometry.region_id == region_id
+        )
+        .all()
+    )
+    return {
+        "status": "success",
+        "data": {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type":     "Feature",
+                    "geometry": {"type": "MultiPolygon"},  # from zone.geometry
+                    "properties": {
+                        "zone_id":     str(ml.zone_id),
+                        "zone_name":   zone.name,
+                        "risk_score":  ml.value,
+                        "category":    _categorize(ml.value),
+                        "explanation": ml.explanation,
+                        "computed_at": ml.computed_at.isoformat()
+                    }
+                }
+                for ml, zone in rows
+            ]
+        }
+    }
+```
+
+Add to `backend/api/routes/system.py`:
+
+```python
+@router.post("/intelligence/run")
+async def run_intelligence(
+    region_id: str = Query(None),
+    _user = Depends(require_role("admin", "analyst"))
+):
+    from ml.runner import run_intelligence_cycle
+    result = run_intelligence_cycle(region_id)
+    return {"status": "success", "data": result}
+
+@router.get("/insights")
+async def get_insights(
+    region_id: str = Query(...),
+    db: Session = Depends(get_db),
+    _user = Depends(get_current_user)
+):
+    from ml.explainer import generate_ai_insights
+    insights = generate_ai_insights(db, region_id)
+    return {"status": "success", "data": insights}
+```
+
+---
+
+## Step 9 — Run First Intelligence Cycle
+
+```
+cd backend
+python -m ml.runner
+```
+
+Then check MLflow UI at http://localhost:5000 to confirm experiments were logged.
+
+---
+
+## Verification Checklist
+
+```
+MLflow server running at localhost:5000
+MLflow UI shows experiments: aq_forecast, lst_forecast, anomaly detection, kmeans
+ml_outputs table has rows after running runner.py
+Risk scores exist for all zones with data (value between 0-100)
+Forecast rows exist with valid_from and valid_to timestamps
+GET /api/v1/layers/composite/risk returns features with risk_score property
+GET /api/v1/system/insights returns 3 insight cards
+Anomaly-flagged observations have is_anomalous = true in raw_observations
+```
