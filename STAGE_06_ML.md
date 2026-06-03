@@ -350,3 +350,120 @@ def compute_all_risk_scores(db: Session, region_id: str) -> list:
             AVG(CASE WHEN o.layer_type = 'aq'   THEN o.value END) as aq_mean,
             AVG(CASE WHEN o.layer_type = 'lst'  THEN o.value END) as lst_mean,
             AVG(CASE WHEN o.layer_type = 'ndvi' THEN o.value END) as ndvi_mean
+        FROM zone_geometries z
+        LEFT JOIN raw_observations o ON ST_Within(o.geometry, z.geometry)
+            AND o.observed_at >= NOW() - INTERVAL '6 hours'
+        WHERE z.region_id = :region_id
+        GROUP BY z.id, z.name
+    """), {"region_id": region_id}).fetchall()
+
+    if not rows:
+        return []
+
+    df = pd.DataFrame(rows, columns=["zone_id", "zone_name", "aq_mean", "lst_mean", "ndvi_mean"])
+    df = df.fillna(df.mean(numeric_only=True))
+
+    scaler   = MinMaxScaler()
+    aq_n     = scaler.fit_transform(df[["aq_mean"]].values).flatten()
+    lst_n    = scaler.fit_transform(df[["lst_mean"]].values).flatten()
+    ndvi_n   = 1 - scaler.fit_transform(df[["ndvi_mean"]].values).flatten()
+
+    scores   = (
+        WEIGHTS["aq"]   * aq_n +
+        WEIGHTS["lst"]  * lst_n +
+        WEIGHTS["ndvi"] * ndvi_n
+    ) * 100
+
+    # Delete previous risk score outputs for this region
+    db.execute(text("""
+        DELETE FROM ml_outputs
+        WHERE model_type = 'risk_score'
+          AND zone_id IN (
+              SELECT id FROM zone_geometries WHERE region_id = :region_id
+          )
+    """), {"region_id": region_id})
+
+    outputs = []
+    results = []
+    for i, row in df.iterrows():
+        score       = round(float(scores[i]), 1)
+        explanation = _build_explanation(aq_n[i], lst_n[i], ndvi_n[i], score)
+        outputs.append(MLOutput(
+            id=uuid.uuid4(),
+            zone_id=str(row["zone_id"]),
+            model_type="risk_score",
+            output_type="composite_score",
+            value=score,
+            explanation=explanation,
+            model_version="weighted-v1.0",
+            computed_at=datetime.now(timezone.utc)
+        ))
+        results.append({
+            "zone_id":     str(row["zone_id"]),
+            "zone_name":   row["zone_name"],
+            "risk_score":  score,
+            "category":    _categorize(score),
+            "explanation": explanation,
+            "contributions": {
+                "aq":   round(WEIGHTS["aq"]   * aq_n[i]   * 100, 1),
+                "lst":  round(WEIGHTS["lst"]  * lst_n[i]  * 100, 1),
+                "ndvi": round(WEIGHTS["ndvi"] * ndvi_n[i] * 100, 1)
+            }
+        })
+
+    db.bulk_save_objects(outputs)
+    db.commit()
+
+    print(f"Risk scores computed for {len(results)} zones")
+    return results
+
+
+def _categorize(score: float) -> str:
+    if score >= 85: return "Critical Risk"
+    if score >= 70: return "High Risk"
+    if score >= 50: return "Moderate Risk"
+    if score >= 30: return "Low Risk"
+    return "Minimal Risk"
+
+
+def _build_explanation(aq_n, lst_n, ndvi_n, score) -> str:
+    parts = []
+    if aq_n   > 0.7: parts.append("very poor air quality")
+    elif aq_n > 0.4: parts.append("elevated PM2.5 levels")
+    if lst_n  > 0.7: parts.append("high land surface temperature")
+    elif lst_n > 0.4: parts.append("above-average surface heat")
+    if ndvi_n > 0.7: parts.append("critically low green cover")
+    elif ndvi_n > 0.4: parts.append("below-average vegetation")
+    if not parts:
+        return "All environmental indicators within acceptable ranges."
+    return "Risk elevated due to " + ", ".join(parts) + "."
+```
+
+---
+
+## Step 6 — Create AI Insights Generator
+
+This generates the three insight cards in the bottom-right panel of the mockup
+("Heat index will increase by 3-5C in next 48h", "AQI likely to remain in Very Poor category", "Low green cover in Central and North Delhi increasing heat risk").
+
+Create `backend/ml/explainer.py`:
+
+```python
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+
+def generate_ai_insights(db: Session, region_id: str) -> list[dict]:
+    insights = []
+
+    # Insight 1: Temperature trend
+    lst_forecast = db.execute(text("""
+        SELECT AVG(value) as forecast_mean, MAX(value) as forecast_peak
+        FROM ml_outputs
+        WHERE model_type  = 'prophet_forecast'
+          AND output_type = 'point_forecast'
+          AND layer_type  = 'lst'
+          AND valid_from  >= NOW()
+          AND valid_to    <= NOW() + INTERVAL '48 hours'
+    """)).fetchone()
+
+    if lst_forecast and lst_forecast.forecast_peak:
