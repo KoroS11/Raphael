@@ -467,3 +467,120 @@ def generate_ai_insights(db: Session, region_id: str) -> list[dict]:
     """)).fetchone()
 
     if lst_forecast and lst_forecast.forecast_peak:
+        current_lst = db.execute(text("""
+            SELECT AVG(value) FROM raw_observations
+            WHERE layer_type = 'lst' AND observed_at >= NOW() - INTERVAL '6 hours'
+        """)).scalar()
+        if current_lst:
+            delta = round(float(lst_forecast.forecast_peak) - float(current_lst), 1)
+            insights.append({
+                "type":    "temperature",
+                "icon":    "heat",
+                "message": f"Heat index will increase by {delta}°C in next 48 hours.",
+                "severity": "warning" if delta > 2 else "info"
+            })
+
+    # Insight 2: AQ category forecast
+    aq_forecast = db.execute(text("""
+        SELECT AVG(value) as mean_forecast
+        FROM ml_outputs
+        WHERE model_type  = 'prophet_forecast'
+          AND layer_type  = 'aq'
+          AND valid_from  >= NOW()
+          AND valid_to    <= NOW() + INTERVAL '24 hours'
+    """)).fetchone()
+
+    if aq_forecast and aq_forecast.mean_forecast:
+        val = float(aq_forecast.mean_forecast)
+        cat = _aqi_category(val)
+        insights.append({
+            "type":    "air_quality",
+            "icon":    "cloud",
+            "message": f"AQI forecast to remain in '{cat}' category over next 24 hours.",
+            "severity": "critical" if val > 200 else "warning" if val > 100 else "info"
+        })
+
+    # Insight 3: Low NDVI zones
+    low_ndvi_zones = db.execute(text("""
+        SELECT COUNT(*) as count, STRING_AGG(z.name, ', ' ORDER BY o.avg_ndvi) as zones
+        FROM (
+            SELECT z.id, z.name, AVG(o.value) as avg_ndvi
+            FROM zone_geometries z
+            JOIN raw_observations o ON ST_Within(o.geometry, z.geometry)
+            WHERE o.layer_type = 'ndvi'
+              AND o.observed_at >= NOW() - INTERVAL '24 hours'
+            GROUP BY z.id, z.name
+            HAVING AVG(o.value) < 0.2
+            LIMIT 3
+        ) o JOIN zone_geometries z ON z.id = o.id
+    """)).fetchone()
+
+    if low_ndvi_zones and low_ndvi_zones.count > 0:
+        insights.append({
+            "type":    "vegetation",
+            "icon":    "leaf",
+            "message": f"Low green cover in {low_ndvi_zones.zones} increasing heat risk.",
+            "severity": "warning"
+        })
+
+    return insights[:3]  # Return max 3 insights (matching mockup)
+
+
+def _aqi_category(aqi: float) -> str:
+    if aqi <= 50:  return "Good"
+    if aqi <= 100: return "Moderate"
+    if aqi <= 150: return "Unhealthy for Sensitive Groups"
+    if aqi <= 200: return "Unhealthy"
+    if aqi <= 300: return "Very Poor"
+    return "Hazardous"
+```
+
+---
+
+## Step 7 — Create the Intelligence Runner
+
+Create `backend/ml/runner.py`:
+
+```python
+from sqlalchemy.orm import Session
+from db.connection import SessionLocal
+from db.models import Region
+from .forecast   import train_and_forecast
+from .anomaly    import detect_anomalies
+from .clustering import cluster_zones
+from .risk_score import compute_all_risk_scores
+from .explainer  import generate_ai_insights
+import structlog
+
+log = structlog.get_logger()
+
+def run_intelligence_cycle(region_id: str = None):
+    db = SessionLocal()
+    try:
+        if not region_id:
+            region = db.query(Region).filter(Region.is_active == True).first()
+            if not region:
+                log.error("No active region found")
+                return
+            region_id = str(region.id)
+
+        log.info("intelligence_cycle_start", region_id=region_id[:8])
+
+        # 1. Anomaly detection across all layers
+        for layer in ["aq", "lst", "ndvi", "fire"]:
+            count = detect_anomalies(db, region_id, layer)
+            log.info("anomaly_detection_done", layer=layer, count=count)
+
+        # 2. Zone clustering
+        cluster_zones(db, region_id)
+
+        # 3. Risk scores for all zones
+        compute_all_risk_scores(db, region_id)
+
+        # 4. Forecasts for key zones (top 5 by risk score)
+        from sqlalchemy import text
+        top_zones = db.execute(text("""
+            SELECT DISTINCT zone_id FROM ml_outputs
+            WHERE model_type = 'risk_score'
+            ORDER BY value DESC LIMIT 5
+        """)).fetchall()
