@@ -232,3 +232,121 @@ def detect_anomalies(db: Session, region_id: str, layer_type: str) -> int:
 
     print(f"Anomaly detection: {len(anomaly_ids)} anomalies found in {len(rows)} {layer_type} observations")
     return len(anomaly_ids)
+```
+
+---
+
+## Step 4 — Create KMeans Zone Clustering
+
+Create `backend/ml/clustering.py`:
+
+```python
+import uuid
+import numpy as np
+import pandas as pd
+import mlflow
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from datetime import datetime, timezone
+from sqlalchemy.orm import Session
+
+N_CLUSTERS = 5
+
+def cluster_zones(db: Session, region_id: str) -> dict:
+    from db.models import ZoneGeometry, MLOutput
+    from sqlalchemy import text
+
+    # Get current-day mean values per zone for all layers
+    rows = db.execute(text("""
+        SELECT
+            z.id   as zone_id,
+            z.name as zone_name,
+            AVG(CASE WHEN o.layer_type = 'aq'   THEN o.value END) as aq_mean,
+            AVG(CASE WHEN o.layer_type = 'lst'  THEN o.value END) as lst_mean,
+            AVG(CASE WHEN o.layer_type = 'ndvi' THEN o.value END) as ndvi_mean
+        FROM zone_geometries z
+        LEFT JOIN raw_observations o ON ST_Within(o.geometry, z.geometry)
+            AND o.observed_at >= NOW() - INTERVAL '6 hours'
+        WHERE z.region_id = :region_id
+        GROUP BY z.id, z.name
+        HAVING COUNT(o.id) > 0
+    """), {"region_id": region_id}).fetchall()
+
+    if len(rows) < N_CLUSTERS:
+        print(f"Not enough zones with data for clustering: {len(rows)}")
+        return {}
+
+    df = pd.DataFrame(rows, columns=["zone_id", "zone_name", "aq_mean", "lst_mean", "ndvi_mean"])
+    df = df.fillna(df.mean(numeric_only=True))
+
+    X      = df[["aq_mean", "lst_mean", "ndvi_mean"]].values
+    scaler = StandardScaler()
+    X_norm = scaler.fit_transform(X)
+
+    with mlflow.start_run(run_name=f"kmeans_zones_{region_id[:8]}"):
+        km     = KMeans(n_clusters=N_CLUSTERS, init="k-means++", n_init=10, random_state=42)
+        labels = km.fit_predict(X_norm)
+
+        mlflow.log_params({"n_clusters": N_CLUSTERS, "n_zones": len(df)})
+        mlflow.log_metric("inertia", float(km.inertia_))
+
+    # Write cluster assignments to ml_outputs
+    outputs = []
+    for i, row in df.iterrows():
+        outputs.append(MLOutput(
+            id=uuid.uuid4(),
+            zone_id=str(row["zone_id"]),
+            model_type="kmeans_clustering",
+            output_type="cluster_assignment",
+            value=float(labels[i]),
+            explanation=_cluster_label(int(labels[i]), df.iloc[i]),
+            model_version="sklearn-kmeans-1.5",
+            computed_at=datetime.now(timezone.utc)
+        ))
+
+    db.bulk_save_objects(outputs)
+    db.commit()
+
+    result = dict(zip(df["zone_id"].astype(str), labels.tolist()))
+    print(f"Clustered {len(df)} zones into {N_CLUSTERS} groups")
+    return result
+
+
+def _cluster_label(cluster_id: int, row: pd.Series) -> str:
+    labels = {
+        0: "Low stress — good air quality, moderate temperature, adequate vegetation",
+        1: "Heat stressed — elevated surface temperature, low vegetation cover",
+        2: "Pollution hotspot — poor air quality, high urban density",
+        3: "High risk — combination of poor air quality and elevated heat",
+        4: "Critical zone — all indicators at elevated levels"
+    }
+    return labels.get(cluster_id, f"Environmental cluster {cluster_id}")
+```
+
+---
+
+## Step 5 — Create the Risk Scorer
+
+Create `backend/ml/risk_score.py`:
+
+```python
+import uuid
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from datetime import datetime, timezone
+from sqlalchemy.orm import Session
+
+WEIGHTS = {"aq": 0.40, "lst": 0.35, "ndvi": 0.25}
+
+def compute_all_risk_scores(db: Session, region_id: str) -> list:
+    from db.models import ZoneGeometry, MLOutput
+    from sqlalchemy import text
+
+    rows = db.execute(text("""
+        SELECT
+            z.id   as zone_id,
+            z.name as zone_name,
+            AVG(CASE WHEN o.layer_type = 'aq'   THEN o.value END) as aq_mean,
+            AVG(CASE WHEN o.layer_type = 'lst'  THEN o.value END) as lst_mean,
+            AVG(CASE WHEN o.layer_type = 'ndvi' THEN o.value END) as ndvi_mean
