@@ -80,3 +80,45 @@ xcode-select --install
 GDAL must be installed at the system level before the Python gdal package works.
 
 ### Windows
+Download OSGeo4W installer from https://trac.osgeo.org/osgeo4w
+Run installer, select "Advanced Install", choose gdal package.
+Add `C:\OSGeo4W\bin` to system PATH.
+
+### Ubuntu / Debian
+```
+sudo apt install -y gdal-bin libgdal-dev python3-gdal
+```
+
+### macOS
+```
+brew install gdal
+```
+
+Verify:
+```
+gdal-config --version   (must show 3.x.x)
+```
+
+---
+
+## Step 6 — Install SpatiaLite (for low-RAM deployments)
+
+### Windows
+Download mod_spatialite from https://www.gaia-gis.it/gaia-sins
+Place mod_spatialite.dll in C:\Windows\System32
+
+### Ubuntu
+```
+sudo apt install -y spatialite-bin libsqlite3-mod-spatialite
+```
+
+### macOS
+```
+brew install spatialite-tools
+```
+
+---
+
+## Step 7 — Install PostgreSQL + PostGIS (for high-RAM deployments)
+
+### Windows
