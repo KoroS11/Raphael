@@ -473,3 +473,122 @@ out body geom;
 | Update frequency | Every 3 years |
 | Historical depth | 1975 onwards (Landsat archive) |
 | Base URL | https://ghsl.jrc.ec.europa.eu/download.php |
+| Authentication | None |
+| Data format | GeoTIFF |
+| Raphael layer | Urban Density |
+| Prefect flow | urban_ghsl.py |
+| Schedule | Annual check for new release |
+
+Notes: GHSL is produced by the European Joint Research Centre. It classifies every 100m cell globally as urban centre, urban cluster, suburban, or rural based on satellite imagery. This classification informs the urban density layer and adjusts the risk score for population exposure.
+
+---
+
+### 5.4 WorldPop
+
+| Property | Value |
+|---|---|
+| Data type | Gridded population density estimates |
+| Parameters | People per square kilometer |
+| Coverage | All low and middle income countries, global aggregates |
+| Resolution | 1 km and 100 m |
+| Update frequency | Annual |
+| Historical depth | 2000 onwards |
+| Base URL | https://hub.worldpop.org/geodata |
+| Authentication | None |
+| Data format | GeoTIFF |
+| Raphael layer | Urban Density (population exposure weighting) |
+| Prefect flow | pop_worldpop.py |
+| Schedule | Annual |
+
+Notes: Population density is used to weight environmental risk scores by exposure. A zone with high AQI and high population density has greater aggregate risk than the same AQI reading in a sparsely populated industrial area.
+
+---
+
+### 5.5 NASA SEDAC — Socioeconomic Data and Applications Center
+
+| Property | Value |
+|---|---|
+| Data type | Socioeconomic and environmental combined datasets |
+| Parameters | Population density, urban extents, poverty indicators, climate vulnerability |
+| Coverage | Global |
+| Base URL | https://sedac.ciesin.columbia.edu/data |
+| Authentication | Free NASA Earthdata account |
+| Data format | GeoTIFF, CSV, Shapefile |
+| Raphael layer | Socioeconomic context layer (optional) |
+| Prefect flow | sedac_socioeco.py |
+| Schedule | Annual |
+
+---
+
+### 5.6 Datameet — India Open Data Community
+
+| Property | Value |
+|---|---|
+| Data type | India-specific administrative and statistical boundaries |
+| Parameters | Districts, assembly constituencies, municipal wards, panchayat boundaries |
+| Coverage | India only |
+| Update frequency | Community maintained |
+| Base URL | https://raw.githubusercontent.com/datameet/maps/master |
+| Authentication | None |
+| Data format | GeoJSON, Shapefile |
+| Raphael layer | Administrative Boundaries (India — supplemental to GADM) |
+| Prefect flow | boundaries_gadm.py (Datameet loaded alongside GADM for India) |
+| Schedule | Annual |
+
+Notes: Datameet provides more detailed India-specific administrative boundaries than GADM for sub-district levels. Ward-level boundaries for major Indian cities are sourced exclusively from Datameet as GADM does not include municipal ward polygons.
+
+---
+
+## 6. Hazard and Disaster Data
+
+### 6.1 GDACS — Global Disaster Alert and Coordination System
+
+| Property | Value |
+|---|---|
+| Data type | Active global disaster alerts |
+| Parameters | Floods, tropical cyclones, earthquakes, volcanoes, droughts — severity, extent, affected population |
+| Coverage | Global |
+| Update frequency | Real-time |
+| Base URL | https://www.gdacs.org/xml/rss.xml |
+| Authentication | None |
+| Data format | RSS/XML, JSON |
+| Raphael layer | Hazard Alerts |
+| Prefect flow | hazard_gdacs.py |
+| Schedule | Every 1 hour |
+
+Notes: GDACS is operated jointly by the United Nations and the European Commission. Active disaster alerts for the user's region are surfaced as a pinned notification at the top of the dashboard regardless of which view is active.
+
+---
+
+### 6.2 FEMA National Flood Hazard Layer
+
+| Property | Value |
+|---|---|
+| Data type | Official US flood zone mapping |
+| Parameters | Flood zone classification, base flood elevation, floodway extent |
+| Coverage | United States only |
+| Update frequency | Continuous updates by county |
+| Base URL | https://hazards.fema.gov/gis/nfhl/rest/services |
+| Authentication | None |
+| Data format | REST feature service, Shapefile |
+| Raphael layer | Hazard — Flood Risk (US regions only) |
+| Prefect flow | hazard_fema.py |
+| Schedule | Every 30 days |
+
+---
+
+### 6.3 EM-DAT — International Disaster Database
+
+| Property | Value |
+|---|---|
+| Data type | Historical disaster event records since 1900 |
+| Parameters | Disaster type, date, location, fatalities, affected population, economic damage |
+| Coverage | Global |
+| Update frequency | Weekly |
+| Historical depth | 1900 to present |
+| Base URL | https://public.emdat.be/api |
+| Authentication | Free research account at emdat.be |
+| Data format | JSON, CSV |
+| Raphael layer | Historical Hazard Events (event markers on timeline) |
+| Prefect flow | hazard_emdat.py |
+| Schedule | Every 7 days |

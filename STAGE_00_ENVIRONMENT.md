@@ -163,3 +163,44 @@ tauri --version
 
 ---
 
+## Step 10 — Install Playwright System Browsers
+
+This is required for the report generation pipeline (map screenshot capture).
+Run after Python is installed:
+
+```
+pip install playwright
+playwright install chromium
+```
+
+---
+
+## Step 11 — Install WeasyPrint System Dependencies
+
+WeasyPrint requires system-level libraries for PDF rendering.
+
+### Windows
+Download and install GTK3 runtime from:
+https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer/releases
+Add GTK bin directory to PATH.
+
+### Ubuntu
+```
+sudo apt install -y libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+  libfontconfig1 libcairo2 libgdk-pixbuf2.0-0
+```
+
+### macOS
+```
+brew install pango libffi
+```
+
+---
+
+## Step 12 — Set Up API Keys
+
+Create a file named `.env` in the root of the project. Add the following keys, obtained by registering free accounts at each listed URL:
+
+```
+# NASA (register at urs.earthdata.nasa.gov)
+EARTHDATA_USERNAME=
