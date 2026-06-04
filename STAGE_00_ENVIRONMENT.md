@@ -204,3 +204,45 @@ Create a file named `.env` in the root of the project. Add the following keys, o
 ```
 # NASA (register at urs.earthdata.nasa.gov)
 EARTHDATA_USERNAME=
+EARTHDATA_PASSWORD=
+EARTHDATA_TOKEN=
+NASA_FIRMS_KEY=         # register at firms.modaps.eosdis.nasa.gov
+
+# Copernicus (register at sentinelhub.com)
+SENTINEL_CLIENT_ID=
+SENTINEL_CLIENT_SECRET=
+
+# Air Quality
+WAQI_API_KEY=           # register at aqicn.org/data-platform/token
+IQAIR_API_KEY=          # register at iqair.com/dashboard/api
+OWM_API_KEY=            # register at openweathermap.org/api
+
+# Vegetation
+GFW_API_KEY=            # register at globalforestwatch.org
+
+# Application (generate with: openssl rand -hex 32)
+RAPHAEL_SECRET_KEY=
+```
+
+Keys with no value can be left blank. Those sources will be disabled until a key is provided.
+
+---
+
+## Verification Checklist
+
+Before proceeding to Stage 01, confirm all of the following pass:
+
+```
+node --version        shows v20.x.x
+npm --version         shows 10.x.x
+python --version      shows 3.11.x
+rustc --version       shows 1.77+
+cargo --version       shows 1.77+
+tauri --version       shows 2.x.x
+gdal-config --version shows 3.x.x
+git --version         shows any version
+playwright --version  shows any version
+.env file exists      with at least RAPHAEL_SECRET_KEY filled
+```
+
+Do not proceed to Stage 01 until all items pass.
