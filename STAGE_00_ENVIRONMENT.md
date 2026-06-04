@@ -122,3 +122,44 @@ brew install spatialite-tools
 ## Step 7 — Install PostgreSQL + PostGIS (for high-RAM deployments)
 
 ### Windows
+Download PostgreSQL 15 installer from https://www.postgresql.org/download/windows
+During install, open Stack Builder after completion and install PostGIS 3.4 extension.
+
+### Ubuntu
+```
+sudo apt install -y postgresql-15 postgresql-15-postgis-3
+sudo systemctl start postgresql
+```
+
+### macOS
+```
+brew install postgresql@15 postgis
+brew services start postgresql@15
+```
+
+---
+
+## Step 8 — Install Git
+
+Download from https://git-scm.com/downloads
+
+Verify:
+```
+git --version
+```
+
+---
+
+## Step 9 — Install Tauri CLI
+
+```
+npm install -g @tauri-apps/cli@next
+```
+
+Verify:
+```
+tauri --version
+```
+
+---
+
