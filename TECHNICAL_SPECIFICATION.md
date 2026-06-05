@@ -410,3 +410,210 @@ schedule_days = 365
 [worldpop]
 enabled = false
 base_url = "https://hub.worldpop.org/geodata"
+resolution = "1km"
+schedule_days = 365
+
+[nasa_sedac]
+enabled = false
+base_url = "https://sedac.ciesin.columbia.edu/data"
+datasets = ["gpw-v4-population-density"]
+schedule_days = 365
+
+[datameet]
+enabled = true
+base_url = "https://raw.githubusercontent.com/datameet/maps/master"
+datasets = ["Districts", "Assembly_Constituencies", "Municipal_Wards"]
+country = "india"
+schedule_days = 730
+
+# HAZARD SOURCES
+
+[gdacs]
+enabled = true
+rss_url = "https://www.gdacs.org/xml/rss.xml"
+alert_types = ["FL", "TC", "EQ", "VO", "DR"]
+schedule_hours = 1
+
+[fema_flood]
+enabled = false
+base_url = "https://hazards.fema.gov/gis/nfhl/rest/services"
+schedule_days = 30
+
+[emdat]
+enabled = false
+base_url = "https://public.emdat.be/api"
+api_key = "${EMDAT_API_KEY}"
+schedule_days = 7
+
+[noaa_ncei]
+enabled = true
+base_url = "https://www.ncei.noaa.gov/access/services/data/v1"
+dataset = "global-summary-of-the-day"
+schedule_days = 7
+```
+
+### 2.3 ml.toml
+
+```toml
+[forecast.prophet]
+changepoint_prior_scale = 0.05
+seasonality_prior_scale = 10.0
+seasonality_mode = "multiplicative"
+yearly_seasonality = true
+weekly_seasonality = true
+daily_seasonality = true
+uncertainty_samples = 1000
+forecast_horizon_hours = 48
+
+[anomaly.isolation_forest]
+n_estimators = 100
+contamination = 0.05
+max_samples = "auto"
+random_state = 42
+rolling_window_days = 7
+
+[clustering.kmeans]
+n_clusters = 5
+init = "k-means++"
+n_init = 10
+max_iter = 300
+random_state = 42
+refit_interval_days = 7
+
+[risk_score]
+weight_aqi = 0.40
+weight_lst = 0.35
+weight_ndvi = 0.25
+normalization = "minmax"
+score_range = [0, 100]
+high_risk_threshold = 70
+critical_risk_threshold = 85
+
+[retraining]
+min_observations_forecast = 30
+min_observations_anomaly = 14
+retrain_after_n_new_obs = 10
+nightly_retrain_hour = 2
+```
+
+---
+
+## 3. Environment Variables
+
+```bash
+# .env  (never committed to version control)
+
+# NASA
+EARTHDATA_USERNAME=your_nasa_earthdata_username
+EARTHDATA_PASSWORD=your_nasa_earthdata_password
+EARTHDATA_TOKEN=your_nasa_earthdata_bearer_token
+NASA_FIRMS_KEY=your_nasa_firms_map_key
+
+# ESA / Copernicus
+SENTINEL_CLIENT_ID=your_sentinel_hub_client_id
+SENTINEL_CLIENT_SECRET=your_sentinel_hub_client_secret
+CAMS_API_KEY=your_copernicus_cams_key
+ERA5_API_KEY=your_copernicus_cds_key
+
+# Air Quality
+WAQI_API_KEY=your_waqi_token
+IQAIR_API_KEY=your_iqair_key
+OWM_API_KEY=your_openweathermap_key
+
+# Vegetation
+GFW_API_KEY=your_global_forest_watch_key
+
+# Hazard
+EMDAT_API_KEY=your_emdat_key
+
+# USGS
+USGS_USERNAME=your_usgs_username
+USGS_PASSWORD=your_usgs_password
+
+# Application
+RAPHAEL_ENV=production
+RAPHAEL_SECRET_KEY=generate_with_openssl_rand_hex_32
+RAPHAEL_DATA_DIR=/path/to/data
+
+# Database (PostGIS mode only)
+POSTGRES_USER=raphael
+POSTGRES_PASSWORD=strong_password_here
+POSTGRES_DB=raphael_db
+```
+
+---
+
+## 4. Database Schema — Full Migration
+
+```sql
+-- migrations/versions/001_initial_schema.sql
+
+CREATE EXTENSION IF NOT EXISTS postgis;
+-- SpatiaLite equivalent: SELECT InitSpatialMetaData();
+
+-- USERS AND AUTH
+
+CREATE TABLE users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username        VARCHAR(100) UNIQUE NOT NULL,
+    password_hash   TEXT NOT NULL,
+    display_name    VARCHAR(200),
+    role            VARCHAR(20) NOT NULL DEFAULT 'viewer'
+                    CHECK (role IN ('admin', 'analyst', 'field_worker', 'viewer')),
+    organization    VARCHAR(200),
+    preferred_language CHAR(5) DEFAULT 'en',
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    last_active_at  TIMESTAMPTZ
+);
+
+CREATE TABLE activity_log (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID REFERENCES users(id),
+    action          VARCHAR(100) NOT NULL,
+    resource_type   VARCHAR(50),
+    resource_id     UUID,
+    metadata        JSONB,
+    performed_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- REGIONS AND SOURCES
+
+CREATE TABLE regions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            VARCHAR(200) NOT NULL,
+    country_code    CHAR(3) NOT NULL,
+    bbox            geometry(Polygon, 4326) NOT NULL,
+    admin_level     INT DEFAULT 2,
+    pmtiles_path    TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    is_active       BOOLEAN DEFAULT false
+);
+
+CREATE INDEX idx_regions_bbox ON regions USING GIST(bbox);
+
+CREATE TABLE sources (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    key             VARCHAR(50) UNIQUE NOT NULL,
+    name            VARCHAR(200) NOT NULL,
+    category        VARCHAR(50) NOT NULL,
+    layer_types     TEXT[] NOT NULL,
+    base_url        TEXT,
+    is_enabled      BOOLEAN DEFAULT true,
+    last_synced_at  TIMESTAMPTZ,
+    last_error      TEXT,
+    error_count     INT DEFAULT 0
+);
+
+-- ENVIRONMENTAL OBSERVATIONS
+
+CREATE TABLE raw_observations (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_id       UUID NOT NULL REFERENCES sources(id),
+    region_id       UUID NOT NULL REFERENCES regions(id),
+    layer_type      VARCHAR(50) NOT NULL,
+    geometry        geometry(Point, 4326) NOT NULL,
+    value           FLOAT NOT NULL,
+    unit            VARCHAR(20),
+    station_id      VARCHAR(100),
+    station_name    VARCHAR(200),
+    observed_at     TIMESTAMPTZ NOT NULL,
