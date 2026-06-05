@@ -823,3 +823,209 @@ Response 200:
           "aqi": 178,
           "aqi_category": "Very Poor",
           "observed_at": "2025-05-18T14:00:00Z",
+          "source": "openaq",
+          "is_anomalous": false,
+          "anomaly_score": 0.12
+        }
+      }
+    ]
+  },
+  "meta": {
+    "layer_type": "aq",
+    "count": 24,
+    "last_synced": "2025-05-18T12:00:00Z",
+    "sources_active": ["openaq", "waqi", "iqair"],
+    "coverage_pct": 78
+  }
+}
+```
+
+### 5.2 Forecast
+
+```
+GET /api/v1/layers/{layer_type}/forecast
+    ?zone_id={uuid}&hours=48
+
+Response 200:
+{
+  "status": "success",
+  "data": {
+    "zone_id": "uuid",
+    "layer_type": "aq",
+    "model_version": "prophet-1.2.3",
+    "mlflow_run_id": "abc123def456",
+    "training_observations": 2184,
+    "forecast": [
+      {
+        "timestamp": "2025-05-18T15:00:00Z",
+        "value": 182.1,
+        "lower_bound": 162.4,
+        "upper_bound": 201.8,
+        "is_exceedance": false
+      }
+    ],
+    "exceedance_windows": [
+      {
+        "from": "2025-05-19T02:00:00Z",
+        "to": "2025-05-19T08:00:00Z",
+        "peak_value": 224.1,
+        "probability": 0.73,
+        "threshold": 200.0
+      }
+    ],
+    "explanation": "PM2.5 forecast to rise overnight. Wind speed drops below 5 km/h from 11 PM. Temperature inversion expected. Peak between 2 AM and 8 AM."
+  },
+  "meta": {
+    "confidence_level": 0.80,
+    "computed_at": "2025-05-18T12:00:00Z"
+  }
+}
+```
+
+### 5.3 Zone Scorecard
+
+```
+GET /api/v1/zones/{id}/scorecard
+
+Response 200:
+{
+  "status": "success",
+  "data": {
+    "zone": {
+      "id": "uuid",
+      "name": "Anand Vihar",
+      "admin_level": 3,
+      "region": "Delhi NCT"
+    },
+    "indicators": {
+      "aq":   { "current": 178.4, "unit": "ug/m3",  "category": "Very Poor", "trend_30d": "worsening", "trend_pct": 12.4 },
+      "lst":  { "current": 44.2,  "unit": "celsius", "category": "High",      "trend_30d": "stable",    "trend_pct": 1.2  },
+      "ndvi": { "current": 0.12,  "unit": "index",   "category": "Very Low",  "trend_30d": "stable",    "trend_pct": -0.8 },
+      "fire": { "current": 2,     "unit": "count",   "category": "Elevated",  "trend_30d": "improving", "trend_pct": -40  },
+      "precip": { "current": 0.0, "unit": "mm",      "category": "None",      "trend_30d": "stable",    "trend_pct": 0    }
+    },
+    "risk_score": {
+      "value": 78,
+      "category": "High Risk",
+      "explanation": "Risk elevated due to very poor air quality, high land surface temperature, and critically low green cover.",
+      "contributions": { "aq": 34.2, "lst": 26.4, "ndvi": 17.4 }
+    },
+    "data_sources": ["openaq", "waqi", "modis_lst", "modis_ndvi"],
+    "recent_alerts": [
+      {
+        "id": "uuid",
+        "rule_name": "PM2.5 Warning",
+        "triggered_at": "2025-05-18T09:00:00Z",
+        "severity": "warning",
+        "value": 178.4
+      }
+    ],
+    "event_markers": []
+  }
+}
+```
+
+### 5.4 Report Generation
+
+```
+POST /api/v1/reports/generate
+Content-Type: application/json
+
+{
+  "report_type": "zone",
+  "title": "Environmental Assessment — Anand Vihar",
+  "organization": "Delhi Green NGO",
+  "date_range": { "from": "2025-04-18", "to": "2025-05-18" },
+  "zones": ["uuid1"],
+  "sections": ["map_snapshot", "scorecard", "trend_charts",
+               "risk_score", "alert_log", "narrative"],
+  "layers_active": ["aq", "lst", "ndvi", "risk"],
+  "language": "en"
+}
+
+Response 202:
+{
+  "status": "success",
+  "data": {
+    "job_id": "uuid",
+    "estimated_seconds": 45
+  }
+}
+
+GET /api/v1/reports/{job_id}/status
+Response 200:
+{
+  "status": "success",
+  "data": {
+    "job_id": "uuid",
+    "state": "completed",
+    "progress_pct": 100,
+    "file_size_bytes": 2847291,
+    "created_at": "2025-05-18T14:30:00Z"
+  }
+}
+
+GET /api/v1/reports/{job_id}/download
+Response: application/pdf binary
+```
+
+---
+
+## 6. ML Implementation
+
+### 6.1 Prophet Forecast Wrapper
+
+```python
+# backend/ml/forecast.py
+
+from prophet import Prophet
+import pandas as pd
+import mlflow
+from ..db.queries import get_observations_for_zone
+from ..config import ML_CONFIG
+
+def train_and_forecast(zone_id: str, layer_type: str, horizon_hours: int = 48) -> dict:
+    obs = get_observations_for_zone(zone_id, layer_type, lookback_days=90)
+    if len(obs) < ML_CONFIG["retraining"]["min_observations_forecast"]:
+        return {"error": "insufficient_data", "count": len(obs)}
+
+    df = pd.DataFrame(obs, columns=["ds", "y"])
+    df["ds"] = pd.to_datetime(df["ds"])
+
+    cfg = ML_CONFIG["forecast"]["prophet"]
+    m = Prophet(
+        changepoint_prior_scale=cfg["changepoint_prior_scale"],
+        seasonality_prior_scale=cfg["seasonality_prior_scale"],
+        seasonality_mode=cfg["seasonality_mode"],
+        uncertainty_samples=cfg["uncertainty_samples"]
+    )
+    m.add_seasonality(name="daily", period=1, fourier_order=8)
+
+    experiment_name = f"{layer_type}_forecast_{zone_id[:8]}"
+    mlflow.set_experiment(experiment_name)
+
+    with mlflow.start_run():
+        mlflow.log_params({
+            "zone_id": zone_id,
+            "layer_type": layer_type,
+            "training_rows": len(df),
+            "horizon_hours": horizon_hours
+        })
+        m.fit(df)
+        future = m.make_future_dataframe(periods=horizon_hours, freq="h")
+        forecast = m.predict(future)
+        tail = forecast.tail(horizon_hours)
+        mlflow.log_metric("forecast_mean", float(tail["yhat"].mean()))
+        mlflow.log_metric("forecast_range", float(tail["yhat"].max() - tail["yhat"].min()))
+
+    return {
+        "forecast": tail[["ds", "yhat", "yhat_lower", "yhat_upper"]].to_dict("records"),
+        "training_rows": len(df)
+    }
+```
+
+### 6.2 IsolationForest Anomaly Detection
+
+```python
+# backend/ml/anomaly.py
+
