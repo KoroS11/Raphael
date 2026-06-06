@@ -106,3 +106,39 @@ in the verification checklist.
 [PASTE STAGE FILE HERE]
 ```
 
+---
+
+## Troubleshooting Common Issues
+
+**GDAL import errors in Python**
+GDAL must be installed at the system level before the Python package works. Reinstall system GDAL from Step 5 of Stage 00, then reinstall the Python gdal package with the exact matching version.
+
+**Tauri build fails on Windows**
+Ensure Microsoft C++ Build Tools are installed with the Desktop development with C++ workload. Restart the terminal after installation.
+
+**PMTiles map is blank**
+The pmtiles protocol handler must be registered in main.tsx before React renders. Check that `maplibregl.addProtocol("pmtiles", protocol.tile)` is called at the module level, not inside a component.
+
+**SpatiaLite mod_spatialite not found**
+On Windows, ensure mod_spatialite.dll is in C:\Windows\System32 and not just in the application directory. On Linux, confirm the path with `find / -name "mod_spatialite*" 2>/dev/null`.
+
+**Prophet training fails with insufficient data**
+Prophet requires a minimum of 30 observations. Run the ingestion flows manually several times to accumulate enough historical data before running the ML stage.
+
+**FastAPI returns 401 on all requests**
+The JWT secret key must be set in the .env file. Generate one with `openssl rand -hex 32` and set it as RAPHAEL_SECRET_KEY.
+
+**deck.gl layers not visible**
+Check that the FastAPI CORS middleware includes both `http://localhost:5173` and `tauri://localhost` in allow_origins. Tauri uses a different origin than the browser.
+
+**WeasyPrint PDF generation fails on Windows**
+GTK3 runtime must be installed and its bin directory must be on PATH. Restart the terminal after adding to PATH.
+
+**Mage.ai iframe blocked**
+Tauri's CSP blocks external iframes by default. Add the following to tauri.conf.json under `app.security`:
+```json
+{
+  "csp": "default-src 'self' http://localhost:6789; frame-src http://localhost:6789"
+}
+```
+
