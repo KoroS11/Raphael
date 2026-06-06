@@ -224,3 +224,60 @@ Custom Report: The user selects which sections to include from a checklist. Any 
 
 **Report Features**
 Reports include the organization name entered during setup, the Raphael version, and the date of generation. All data citations include the source name, the data type, and the timestamp of the most recent sync. Charts and map images are embedded directly. An auto-generated narrative paragraph summarizes the key findings in plain language for each section. Reports are available in A4 format and render cleanly for both digital sharing and print.
+
+---
+
+### 4.8 Custom Data Import
+
+The import module allows externally collected data to be integrated into Raphael's database and visualization system.
+
+**Supported Formats**
+- Comma-separated values (CSV) with latitude and longitude columns
+- GeoJSON
+- Keyhole Markup Language (KML) — the export format of most GPS survey tools
+- ESRI Shapefile
+- Spreadsheet format (XLSX)
+
+**Import Workflow**
+The user selects a file. Raphael reads the file structure and presents a column mapping interface where the user assigns each column to a semantic role — coordinate, timestamp, indicator value, indicator name, unit. Required fields are highlighted. Optional fields can be skipped. A preview of the first ten rows is shown with the mapping applied.
+
+After confirmation, the data is validated. Validation errors are listed per row with the reason for rejection. The user can proceed with valid rows only or correct the file and re-import.
+
+Imported data is stored in the database as a named import dataset. It is available as a data layer on the map, included in trend charts alongside API-sourced data, and eligible for inclusion in reports. Imports can be updated, versioned, or deleted.
+
+---
+
+### 4.9 Multi-User Access Control
+
+**User Roles**
+
+Administrator: Full access to all features, user management, data source configuration, alert rule management, and system settings. Can view activity logs for all users.
+
+Analyst: Access to all data viewing, forecasting, comparison, and export features. Cannot manage users or modify system configuration.
+
+Field Worker: Access to map, alert viewing, zone bookmarking, and report generation. Cannot access raw data exports, custom import, or system settings.
+
+Viewer: Read-only access to the map and dashboard. No export capability.
+
+**Account Management**
+User accounts are stored locally in the database. No cloud authentication service is used. The administrator creates and manages accounts from the settings panel. Passwords are stored using a secure one-way hashing algorithm. Session tokens are scoped to the local machine.
+
+**Activity Log**
+All significant user actions — report generation, data imports, alert rule changes, user account changes — are recorded in an activity log visible to the administrator. The log is queryable by user, action type, and date range and exportable as a CSV.
+
+---
+
+### 4.10 Settings and Administration
+
+**Sync Configuration**
+The administrator sets the sync frequency — hourly, every 6 hours, every 24 hours, or manual only. Individual data sources can be enabled or disabled. A manual sync trigger is always available from the top navigation bar.
+
+**Storage Management**
+The storage panel shows the total database size, broken down by data type and date range. The administrator sets a retention policy per data type — for example, keep 2 years of air quality data but only 90 days of raw satellite imagery. A cleanup operation purges data outside the retention window.
+
+**Offline Tile Management**
+Downloaded tile bundles are listed with their region name, file size, and last-updated date. Additional regions can be downloaded when internet is available. Unused region tiles can be deleted to recover disk space.
+
+**Backup and Restore**
+The entire application database can be exported as a single portable file. This file can be copied to a USB drive and restored on another machine running Raphael. This is the primary mechanism for distributing pre-loaded data to field offices without internet access.
+

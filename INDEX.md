@@ -142,3 +142,39 @@ Tauri's CSP blocks external iframes by default. Add the following to tauri.conf.
 }
 ```
 
+---
+
+## Key Ports Reference
+
+| Service | Port | Health Check URL |
+|---|---|---|
+| React Frontend (dev) | 5173 | http://localhost:5173 |
+| FastAPI | 8000 | http://localhost:8000/health |
+| MLflow | 5000 | http://localhost:5000/health |
+| Prefect | 4200 | http://localhost:4200/health |
+| Mage.ai | 6789 | http://localhost:6789/api/status |
+| PostgreSQL | 5433 | psql -p 5433 -c "SELECT 1" |
+
+---
+
+## Environment Variables Quick Reference
+
+All variables go in `.env` in the project root.
+
+| Variable | Where to Get It | Required |
+|---|---|---|
+| EARTHDATA_USERNAME | urs.earthdata.nasa.gov | Yes (for MODIS LST/NDVI) |
+| EARTHDATA_PASSWORD | urs.earthdata.nasa.gov | Yes |
+| NASA_FIRMS_KEY | firms.modaps.eosdis.nasa.gov | Yes (for fire data) |
+| WAQI_API_KEY | aqicn.org/data-platform/token | Yes (for WAQI AQ) |
+| IQAIR_API_KEY | iqair.com/dashboard/api | Optional |
+| OWM_API_KEY | openweathermap.org/api | Optional |
+| SENTINEL_CLIENT_ID | sentinelhub.com | Optional (high-res NDVI) |
+| SENTINEL_CLIENT_SECRET | sentinelhub.com | Optional |
+| GFW_API_KEY | globalforestwatch.org | Optional |
+| RAPHAEL_SECRET_KEY | openssl rand -hex 32 | Yes |
+| POSTGRES_PASSWORD | Self-defined | Yes (PostGIS mode) |
+
+Variables marked Optional will cause those specific data sources to be disabled. All other features still work.
+
+---
