@@ -70,3 +70,39 @@ Stage 03 (FastAPI)
  (Ingestion) (Raster)     (ML)
       |          |          |
       +----------+----------+
+                 |
+                 v
+           Stage 07 (Map)
+                 |
+                 v
+         Stage 08-12 (UI + Packaging)
+```
+
+Stages 04, 05, and 06 can be worked on in parallel once Stage 03 is complete.
+
+---
+
+## Agent Prompt Template
+
+Use this template when starting each agent session:
+
+```
+You are building Raphael, an urban environmental intelligence desktop application.
+
+Context files attached:
+- docs/SYSTEM_ARCHITECTURE.md
+- docs/TECHNICAL_SPECIFICATION.md
+- docs/DATA_SOURCES.md
+
+Current stage: [STAGE NUMBER AND NAME]
+
+Instructions for this stage are below. Follow them exactly. Use the exact 
+dependency versions specified in TECHNICAL_SPECIFICATION.md. Do not substitute 
+libraries. Do not skip steps. After completing all steps, confirm each item 
+in the verification checklist.
+
+--- PASTE STAGE FILE CONTENTS BELOW THIS LINE ---
+
+[PASTE STAGE FILE HERE]
+```
+
