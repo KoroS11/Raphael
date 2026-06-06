@@ -54,3 +54,60 @@ Reads raw data from the database, applies machine learning models for forecastin
 **API Subsystem**
 A local REST interface that exposes all database content — both raw and computed — to the frontend. All frontend data access goes through this layer. The API is not exposed to any network interface and is accessible only to the application itself.
 
+**Frontend Subsystem**
+The user-facing interface. Renders the interactive map, all data layers, charts, dashboards, alert panels, and report generation tools. Reads exclusively from the local API. Does not communicate with any external service directly.
+
+All four subsystems run as managed background processes inside the desktop application shell. The shell starts and monitors them on launch, surfaces their health status in the interface, and terminates them cleanly on exit.
+
+---
+
+## 4. Feature Modules
+
+### 4.1 Onboarding and Region Setup
+
+The first-run experience walks the user through three steps.
+
+**Step 1 — Profile Selection**
+The user selects their role from three options: NGO Field Worker, City Planner or Government Official, or General User. The selection determines the default view layout and which features are surfaced prominently. All features remain accessible regardless of role selection.
+
+**Step 2 — Region Configuration**
+The user selects their region of interest using one of three methods. They can search for a city or district by name, select from a pre-indexed list of commonly used regions, or draw a custom bounding polygon directly on the map. After selection, the system queries its data availability index to show which data layers are available for that region and at what resolution.
+
+**Step 3 — Initial Sync**
+The system downloads the offline map tile bundle for the selected region, pulls the initial batch of environmental data for all available layers, and runs the intelligence subsystem for the first time. A progress interface shows the status of each component download and data pull. The process can be paused and resumed. Once complete, the system transitions to the main dashboard.
+
+A demo mode is available from the first-run screen. It loads pre-seeded data for a sample region and bypasses the sync step entirely, allowing the interface to be explored immediately.
+
+---
+
+### 4.2 Map Explorer
+
+The Map Explorer is the primary interface. It occupies the full center of the application window and is always visible regardless of which secondary panel is open.
+
+**Base Map**
+The base map renders from locally stored offline tile bundles. Four basemap styles are available: dark, satellite, light, and terrain. The dark style is the default because it provides the highest contrast for environmental data overlays. Tiles are stored in a single-file format that requires no tile server to serve — they are read directly from disk by the rendering engine.
+
+**Data Layers**
+Nine data layers are available, each independently toggleable. The layers panel on the left sidebar lists each layer with a visibility toggle, an opacity slider, and a color legend. Available layers are:
+
+- Land Surface Temperature — rendered as a continuous color gradient heatmap
+- Air Quality Index (PM2.5) — rendered as 3D vertical columns, height proportional to concentration
+- NDVI Green Cover Index — rendered as a transparency-adjusted green overlay derived from satellite imagery
+- Fire and Heat Anomalies — rendered as pulsing point markers at detected anomaly locations
+- Precipitation — rendered as a semi-transparent gradient layer
+- Urban Density — rendered as a choropleth based on built-up area density
+- Risk Score (AI-computed) — rendered as a color-coded zone layer
+- Air Quality Monitoring Stations — rendered as clickable point markers with live reading labels
+- Administrative Boundaries — rendered as glowing boundary outlines at district or ward level
+
+**Layer Interactions**
+Clicking any point on the map opens a location detail panel on the right side showing all active layer values for that point, a 7-day trend sparkline for each indicator, a risk score breakdown, and the timestamp of the most recent data update for each layer.
+
+Drawing a polygon on the map using the selection tool opens a zone summary panel showing aggregate statistics for the selected area across all active layers.
+
+**Time Slider**
+A time control bar runs across the top of the map. It spans from 7 days in the past to 30 days in the future. Dragging the handle to a past date replays historical data across all active layers simultaneously. Dragging to a future date switches active layers to their forecast outputs where a model exists. A play button animates the slider automatically.
+
+**Basemap Controls**
+A basemap selector in the layer panel provides thumbnail previews of each style. A compass indicator shows current map orientation with a reset-to-north button. A zoom control and a locate-to-region button are fixed on the map edge. The current coordinate, zoom level, and elevation at the map center are displayed at the bottom of the map.
+
