@@ -178,3 +178,39 @@ All variables go in `.env` in the project root.
 Variables marked Optional will cause those specific data sources to be disabled. All other features still work.
 
 ---
+
+## Data Flow Quick Reference
+
+```
+External APIs
+     |
+     v (Prefect flows)
+raw_observations table
+     |
+     +----> IsolationForest --> is_anomalous = true
+     |
+     +----> KMeans --> ml_outputs (cluster_assignment)
+     |
+     +----> Prophet --> ml_outputs (point_forecast)
+     |
+     +----> Risk Scorer --> ml_outputs (composite_score)
+     |
+     v (FastAPI)
+Frontend (TanStack Query cache)
+     |
+     v (deck.gl)
+Map layers visible to user
+```
+
+```
+NASA / Copernicus satellite files (HDF4/GeoTIFF)
+     |
+     v (Rasterio)
+Reprojected + clipped + colored PNG tiles
+     |
+     v (FastAPI /tile endpoint)
+BitmapLayer on deck.gl map
+     |
+     v
+LST heatmap and NDVI green cover visible on map
+```

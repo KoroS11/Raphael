@@ -281,3 +281,60 @@ Downloaded tile bundles are listed with their region name, file size, and last-u
 **Backup and Restore**
 The entire application database can be exported as a single portable file. This file can be copied to a USB drive and restored on another machine running Raphael. This is the primary mechanism for distributing pre-loaded data to field offices without internet access.
 
+**Language and Localization**
+The interface language is selectable from the settings panel. The internationalization system supports adding new languages by contributing a translation file. All UI strings, including auto-generated report narratives and alert messages, are localized.
+
+**Application Updates**
+The settings panel shows the current application version and checks for new releases from the project's distribution endpoint when internet is available. The user is notified of available updates and can download and apply them manually.
+
+---
+
+## 5. User Flows
+
+### 5.1 NGO Field Worker — Identifying an Intervention Zone
+
+1. Opens Raphael. The dashboard shows the last synced state of their configured region.
+2. Enables the NDVI layer and the Risk Score layer on the map.
+3. Sorts zones in the ranking view by Risk Score descending.
+4. Identifies three high-risk zones in the top of the list.
+5. Clicks each zone to view its scorecard. Notes that all three have low NDVI and high LST.
+6. Generates a Zone Report for each of the three zones.
+7. Uses the Comparison Report to produce a side-by-side document.
+8. Attaches the report to a grant application for a tree plantation programme in those zones.
+
+### 5.2 City Planner — Monitoring a Policy Intervention
+
+1. Opens Raphael. A new tree plantation drive was completed three months ago in a target ward.
+2. Places an event marker on the date the plantation was completed.
+3. Opens the Trend Report for the target ward.
+4. Views the before-and-after comparison for NDVI and LST relative to the event marker.
+5. Notes a 0.08 increase in NDVI and a 1.4°C reduction in peak LST over the three-month period.
+6. Generates a Trend Report for the ward with the baseline deviation analysis included.
+7. Presents the report at a municipal review meeting as evidence of the policy's effectiveness.
+
+### 5.3 Field Worker — Importing Survey Data
+
+1. Completes a field survey in 40 locations using a GPS logger.
+2. Exports the survey data as a CSV with latitude, longitude, a timestamp, and a measured value.
+3. Opens the import panel in Raphael.
+4. Selects the CSV file and maps the columns.
+5. Reviews the validation result — 38 rows valid, 2 rejected for missing coordinates.
+6. Proceeds with 38 valid rows.
+7. The imported data appears as a custom point layer on the map overlaid on the API-sourced data.
+8. Includes the imported layer in a Zone Report for the survey area.
+
+---
+
+## 6. Constraints and Trade-offs
+
+**No real-time streaming**
+Data is pulled on a schedule rather than streamed continuously. The minimum sync interval is one hour. This is a deliberate trade-off to reduce bandwidth consumption and processing load on low-spec hardware.
+
+**No collaborative editing**
+Multi-user support covers access control and activity logging but not real-time collaboration. Two users editing alert rules simultaneously will overwrite each other's changes. This is acceptable for the target use case, which is small teams rather than large organizations.
+
+**ML model accuracy is bounded by data frequency**
+Forecasting models are only as accurate as the frequency and completeness of the historical data. In regions with sparse monitoring station coverage or infrequent satellite passes, model confidence intervals will be wide and should be interpreted accordingly. Confidence bands are always shown in the interface.
+
+**Satellite imagery processing is hardware-intensive**
+Processing raw satellite imagery to derive NDVI and LST layers is computationally expensive. On minimum-spec hardware, this processing step runs as a low-priority background task and may take significantly longer than on recommended hardware. Pre-processed imagery tiles are cached after the first computation.
