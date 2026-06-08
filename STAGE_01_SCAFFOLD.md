@@ -256,3 +256,67 @@ Replace `src-tauri/tauri.conf.json` with:
 }
 ```
 
+---
+
+## Step 8 — Update Cargo.toml
+
+Replace `src-tauri/Cargo.toml` with the full version from `docs/TECHNICAL_SPECIFICATION.md` Section 1.3.
+
+Then run:
+```
+cd src-tauri
+cargo fetch
+cd ..
+```
+
+---
+
+## Step 9 — Create App Shell Layout
+
+Create `src/App.tsx`:
+
+```typescript
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Shell } from "./components/layout/Shell";
+import { ExplorerView } from "./views/ExplorerView";
+import { DashboardView } from "./views/DashboardView";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { staleTime: 1000 * 60 * 5, retry: 1 },
+  },
+});
+
+export function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Shell>
+          <Routes>
+            <Route path="/"          element={<DashboardView />} />
+            <Route path="/explorer"  element={<ExplorerView />} />
+          </Routes>
+        </Shell>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
+}
+```
+
+Install react-router-dom:
+```
+npm install react-router-dom
+```
+
+---
+
+## Step 10 — Create Global CSS Variables
+
+Replace contents of `src/index.css` with:
+
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
