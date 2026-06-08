@@ -62,3 +62,68 @@ npx shadcn-ui@latest add button card dialog dropdown-menu
 npx shadcn-ui@latest add select slider switch tabs tooltip
 npx shadcn-ui@latest add separator avatar badge progress
 npx shadcn-ui@latest add sheet scroll-area
+```
+
+---
+
+## Step 4 — Configure Tailwind
+
+Replace `tailwind.config.ts` with:
+
+```typescript
+import type { Config } from "tailwindcss";
+
+export default {
+  darkMode: ["class"],
+  content: [
+    "./index.html",
+    "./src/**/*.{ts,tsx}",
+  ],
+  theme: {
+    extend: {
+      colors: {
+        background:   "hsl(var(--background))",
+        foreground:   "hsl(var(--foreground))",
+        sidebar:      "hsl(220 20% 8%)",
+        "sidebar-fg": "hsl(220 10% 70%)",
+        panel:        "hsl(220 15% 11%)",
+        "panel-fg":   "hsl(220 10% 80%)",
+        border:       "hsl(var(--border))",
+        ring:         "hsl(var(--ring))",
+        primary:      { DEFAULT: "hsl(var(--primary))", foreground: "hsl(var(--primary-foreground))" },
+        muted:        { DEFAULT: "hsl(var(--muted))",   foreground: "hsl(var(--muted-foreground))"  },
+      },
+      fontFamily: {
+        sans: ["Inter", "system-ui", "sans-serif"],
+        mono: ["JetBrains Mono", "monospace"],
+      },
+    },
+  },
+  plugins: [require("tailwindcss-animate")],
+} satisfies Config;
+```
+
+Install the animate plugin:
+```
+npm install tailwindcss-animate
+```
+
+---
+
+## Step 5 — Create the Full Folder Structure
+
+Create every folder in the structure below. Create a `.gitkeep` file inside each empty folder so git tracks them.
+
+```
+src/
+  components/
+    ui/              (shadcn components live here automatically)
+    map/
+    charts/
+    panels/
+    layout/
+  views/
+    ExplorerView/
+    DashboardView/
+    RiskIntelligenceView/
+    AnalyticsView/
