@@ -320,3 +320,68 @@ Replace contents of `src/index.css` with:
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  :root {
+    --background: 220 20% 7%;
+    --foreground: 220 10% 90%;
+    --muted: 220 15% 14%;
+    --muted-foreground: 220 10% 55%;
+    --border: 220 15% 18%;
+    --primary: 199 89% 48%;
+    --primary-foreground: 220 20% 7%;
+    --ring: 199 89% 48%;
+    --radius: 0.5rem;
+  }
+}
+
+* { border-color: hsl(var(--border)); }
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: "Inter", system-ui, sans-serif;
+  overflow: hidden;
+}
+
+/* Hide scrollbar but keep scroll functionality */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 2px; }
+```
+
+---
+
+## Step 11 — Create Configuration Files
+
+Create `config/app.toml` using the full content from `docs/TECHNICAL_SPECIFICATION.md` Section 2.1.
+
+Create `config/datasources.toml` using the full content from `docs/TECHNICAL_SPECIFICATION.md` Section 2.2.
+
+Create `config/ml.toml` using the full content from `docs/TECHNICAL_SPECIFICATION.md` Section 2.3.
+
+Copy `.env` from Stage 00 into the project root.
+
+---
+
+## Step 12 — Verify the Scaffold Runs
+
+```
+npm run tauri dev
+```
+
+Expected result: A dark desktop window opens showing a blank React app with no errors in the terminal.
+
+If the window opens successfully, Stage 01 is complete.
+
+---
+
+## Verification Checklist
+
+```
+Tauri window opens with no errors
+npm run build completes without TypeScript errors
+cargo check passes in src-tauri/
+backend/.venv exists with all packages installed
+All folders in the structure above exist
+config/app.toml, datasources.toml, ml.toml exist
+.env exists in project root
+```
