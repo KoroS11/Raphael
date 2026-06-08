@@ -127,3 +127,67 @@ src/
     DashboardView/
     RiskIntelligenceView/
     AnalyticsView/
+    ComparisonView/
+    AlertsView/
+    ReportsView/
+    DataCatalogView/
+    SettingsView/
+  store/
+  api/
+  i18n/
+    locales/
+  types/
+  utils/
+
+backend/
+  api/
+    routes/
+    models/
+  db/
+    migrations/
+      versions/
+  ingestion/
+    flows/
+  processing/
+  ml/
+  reports/
+    templates/
+
+mage/
+  pipelines/
+    csv_import/
+    geojson_import/
+    kml_import/
+    shapefile_import/
+    excel_import/
+  custom/
+
+config/
+data/
+  tiles/
+  boundaries/
+scripts/
+tests/
+  ingestion/
+  ml/
+  api/
+```
+
+---
+
+## Step 6 — Set Up Python Virtual Environment
+
+```
+python -m venv backend/.venv
+```
+
+Activate:
+```
+# Windows
+backend\.venv\Scripts\activate
+
+# Linux / macOS
+source backend/.venv/bin/activate
+```
+
+Install all backend dependencies from `docs/TECHNICAL_SPECIFICATION.md` Section 1.2:
