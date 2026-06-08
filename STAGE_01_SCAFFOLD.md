@@ -191,3 +191,68 @@ source backend/.venv/bin/activate
 ```
 
 Install all backend dependencies from `docs/TECHNICAL_SPECIFICATION.md` Section 1.2:
+```
+pip install -r backend/requirements.txt
+```
+
+This installs: FastAPI, Prefect, Mage.ai, scikit-learn, Prophet, MLflow, Rasterio, GeoPandas, WeasyPrint, Playwright, and all other dependencies.
+
+---
+
+## Step 7 — Configure Tauri
+
+Replace `src-tauri/tauri.conf.json` with:
+
+```json
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Raphael",
+  "version": "1.0.0",
+  "identifier": "com.raphael.environmental",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Raphael — Environmental Intelligence",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1280,
+        "minHeight": 720,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/tray-icon.png",
+      "iconAsTemplate": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true,
+      "sidecar": true
+    },
+    "notification": { "all": true },
+    "fs": { "all": true, "scope": ["$APPDATA/raphael/**"] },
+    "dialog": { "all": true }
+  }
+}
+```
+
