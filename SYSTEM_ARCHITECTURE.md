@@ -369,3 +369,127 @@ Prefect scheduler triggers flow
     | Fetch from source  |---> HTTP error --> Retry x3 (exponential backoff)
     +-------------------+
             |
+            v
+    +-------------------+
+    | Validate schema    |---> Mismatch --> Log warning, skip batch, alert admin
+    +-------------------+
+            |
+            v
+    +-------------------+
+    | Normalize + dedup  |
+    | Reproject CRS      |
+    | Apply scale factors|
+    +-------------------+
+            |
+            v
+    +-------------------+
+    | Bulk write to DB   |---> Error --> Rollback transaction, alert
+    +-------------------+
+            |
+            v
+    +-------------------+
+    | Signal ML runner   |
+    +-------------------+
+```
+
+### 4.2 Complete Flow Inventory
+
+```
+backend/ingestion/flows/
+|
+|-- AIR QUALITY (3 flows)
+|   |-- aq_openaq.py           OpenAQ v3 API          Every 1 hour
+|   |-- aq_waqi.py             World AQI API           Every 1 hour
+|   |-- aq_iqair.py            IQAir AirVisual API     Every 1 hour
+|   `-- aq_cams.py             Copernicus CAMS         Every 6 hours
+|
+|-- WEATHER (3 flows)
+|   |-- weather_openmeteo.py   Open-Meteo API          Every 1 hour
+|   |-- weather_noaa_gfs.py    NOAA GFS model          Every 6 hours
+|   `-- weather_openweathermap.py  OpenWeatherMap API  Every 1 hour
+|
+|-- FIRE AND HEAT (2 flows)
+|   |-- fire_firms.py          NASA FIRMS VIIRS        Every 3 hours
+|   `-- fire_lance.py          NASA LANCE NRT          Every 3 hours
+|
+|-- SATELLITE IMAGERY (4 flows)
+|   |-- lst_modis.py           NASA MODIS MOD11A1      Daily
+|   |-- ndvi_modis.py          NASA MODIS MOD13A2      Every 16 days
+|   |-- ndvi_sentinel.py       Copernicus Sentinel-2   Every 5 days
+|   `-- imagery_usgs.py        USGS Earth Explorer     On demand
+|
+|-- VEGETATION (2 flows)
+|   |-- ndvi_gfw.py            Global Forest Watch API Every 7 days
+|   `-- ndvi_hansen.py         Hansen Forest Change    Annual
+|
+|-- GEOSPATIAL AND URBAN (5 flows)
+|   |-- boundaries_gadm.py     GADM boundaries         One-time per region
+|   |-- osm_features.py        OSM Overpass API        Every 7 days
+|   |-- urban_ghsl.py          GHSL built-up layer     Annual
+|   |-- pop_worldpop.py        WorldPop density        Annual
+|   `-- sedac_socioeco.py      NASA SEDAC              Annual
+|
+|-- HAZARD AND DISASTER (5 flows)
+|   |-- hazard_gdacs.py        GDACS RSS feed          Every 1 hour
+|   |-- hazard_fema.py         FEMA flood zones        Every 30 days
+|   |-- hazard_emdat.py        EM-DAT database         Every 7 days
+|   |-- hazard_noaa_ncei.py    NOAA NCEI events        Every 7 days
+|   `-- hazard_lance.py        NASA LANCE hazards      Every 3 hours
+```
+
+### 4.3 Raster Processing Pipeline (Rasterio + GDAL)
+
+```
+GeoTIFF arrives from NASA / Copernicus
+            |
+            v
+rasterio.open() reads file metadata
+            |
+            v
+Check CRS -- if not EPSG:4326 --> pyproj reproject
+            |
+            v
+Clip to region bounding box (rasterio.mask)
+            |
+            v
+Apply band math:
+  NDVI = (B08 - B04) / (B08 + B04)      [Sentinel-2]
+  LST  = (raw_value * 0.02) - 273.15    [MODIS Kelvin to Celsius]
+            |
+            v
+numpy.clip() to valid range
+            |
+            v
+Apply matplotlib colormap to array --> RGBA PNG
+            |
+            v
+Write PNG to data/tiles/{layer}_{region}_{date}.png
+            |
+            v
+Write tile metadata to raster_tiles table
+            |
+            v
+FastAPI serves tile path to frontend BitmapLayer
+```
+
+---
+
+## 5. Intelligence Layer
+
+### 5.1 Tool Stack
+
+| Task | Tool | Details |
+|---|---|---|
+| Time-series forecast | Prophet (Meta) | AQ + temperature, 48-72h ahead |
+| Anomaly detection | scikit-learn IsolationForest | All layers, rolling 7-day window |
+| Zone clustering | scikit-learn KMeans | 5 clusters, weekly refit |
+| Risk scoring | scikit-learn MinMaxScaler + weighted sum | All zones, after every sync |
+| Model tracking | MLflow | All runs logged, versioned |
+| Raster analytics | Rasterio + NumPy | Band math, zonal statistics |
+| Vector analytics | GeoPandas | Zone aggregation, spatial joins |
+
+### 5.2 Intelligence Run Sequence
+
+```
+Triggered after every ingestion cycle OR manual request
+                        |

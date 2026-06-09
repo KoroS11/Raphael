@@ -617,3 +617,209 @@ CREATE TABLE raw_observations (
     station_id      VARCHAR(100),
     station_name    VARCHAR(200),
     observed_at     TIMESTAMPTZ NOT NULL,
+    synced_at       TIMESTAMPTZ DEFAULT NOW(),
+    raw_payload     JSONB,
+    is_anomalous    BOOLEAN DEFAULT false,
+    anomaly_score   FLOAT
+);
+
+CREATE INDEX idx_raw_obs_layer_region   ON raw_observations(layer_type, region_id);
+CREATE INDEX idx_raw_obs_observed_at    ON raw_observations(observed_at DESC);
+CREATE INDEX idx_raw_obs_geometry       ON raw_observations USING GIST(geometry);
+CREATE INDEX idx_raw_obs_station        ON raw_observations(station_id);
+CREATE INDEX idx_raw_obs_source         ON raw_observations(source_id);
+
+-- ZONES
+
+CREATE TABLE zone_geometries (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    region_id       UUID NOT NULL REFERENCES regions(id),
+    admin_level     INT NOT NULL,
+    name            VARCHAR(200) NOT NULL,
+    name_local      VARCHAR(200),
+    gadm_gid        VARCHAR(100),
+    geometry        geometry(MultiPolygon, 4326) NOT NULL,
+    properties      JSONB,
+    source          VARCHAR(50) DEFAULT 'gadm'
+);
+
+CREATE INDEX idx_zones_region   ON zone_geometries(region_id);
+CREATE INDEX idx_zones_geometry ON zone_geometries USING GIST(geometry);
+
+-- RASTER TILES
+
+CREATE TABLE raster_tiles (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    layer_type      VARCHAR(50) NOT NULL,
+    region_id       UUID NOT NULL REFERENCES regions(id),
+    source_id       UUID REFERENCES sources(id),
+    tile_path       TEXT NOT NULL,
+    bounds          geometry(Polygon, 4326),
+    processed_at    TIMESTAMPTZ DEFAULT NOW(),
+    valid_date      DATE NOT NULL,
+    resolution_m    INT,
+    colormap        VARCHAR(50) DEFAULT 'plasma'
+);
+
+CREATE INDEX idx_raster_layer_region ON raster_tiles(layer_type, region_id);
+CREATE INDEX idx_raster_valid_date   ON raster_tiles(valid_date DESC);
+
+-- ML OUTPUTS
+
+CREATE TABLE ml_outputs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    zone_id         UUID REFERENCES zone_geometries(id),
+    geometry        geometry(Point, 4326),
+    model_type      VARCHAR(50) NOT NULL,
+    output_type     VARCHAR(50) NOT NULL,
+    layer_type      VARCHAR(50),
+    value           FLOAT NOT NULL,
+    confidence_lower FLOAT,
+    confidence_upper FLOAT,
+    explanation     TEXT,
+    model_version   VARCHAR(50),
+    mlflow_run_id   VARCHAR(100),
+    computed_at     TIMESTAMPTZ DEFAULT NOW(),
+    valid_from      TIMESTAMPTZ,
+    valid_to        TIMESTAMPTZ
+);
+
+CREATE INDEX idx_ml_type        ON ml_outputs(model_type, output_type);
+CREATE INDEX idx_ml_zone        ON ml_outputs(zone_id);
+CREATE INDEX idx_ml_valid       ON ml_outputs(valid_from, valid_to);
+CREATE INDEX idx_ml_computed    ON ml_outputs(computed_at DESC);
+
+-- ALERTS
+
+CREATE TABLE alert_rules (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    name            VARCHAR(200) NOT NULL,
+    layer_type      VARCHAR(50) NOT NULL,
+    geometry        geometry(Geometry, 4326),
+    zone_id         UUID REFERENCES zone_geometries(id),
+    operator        VARCHAR(20) NOT NULL
+                    CHECK (operator IN ('gt', 'lt', 'change_gt', 'change_lt')),
+    threshold       FLOAT NOT NULL,
+    severity        VARCHAR(20) NOT NULL DEFAULT 'warning'
+                    CHECK (severity IN ('info', 'warning', 'critical')),
+    time_window     JSONB,
+    radius_km       FLOAT,
+    is_active       BOOLEAN DEFAULT true,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE alert_events (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rule_id         UUID NOT NULL REFERENCES alert_rules(id),
+    triggered_at    TIMESTAMPTZ DEFAULT NOW(),
+    observed_value  FLOAT NOT NULL,
+    location        geometry(Point, 4326),
+    acknowledged    BOOLEAN DEFAULT false,
+    acknowledged_at TIMESTAMPTZ,
+    acknowledged_by UUID REFERENCES users(id)
+);
+
+CREATE INDEX idx_alert_events_rule      ON alert_events(rule_id);
+CREATE INDEX idx_alert_events_triggered ON alert_events(triggered_at DESC);
+
+-- CUSTOM IMPORTS
+
+CREATE TABLE import_datasets (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    name            VARCHAR(200) NOT NULL,
+    format          VARCHAR(20) NOT NULL
+                    CHECK (format IN ('csv', 'geojson', 'kml', 'shapefile', 'excel')),
+    row_count       INT,
+    schema_map      JSONB NOT NULL,
+    layer_type      VARCHAR(50),
+    mage_pipeline_id VARCHAR(100),
+    imported_at     TIMESTAMPTZ DEFAULT NOW(),
+    is_visible      BOOLEAN DEFAULT true
+);
+
+-- EVENT MARKERS
+
+CREATE TABLE event_markers (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    name            VARCHAR(200) NOT NULL,
+    description     TEXT,
+    zone_id         UUID REFERENCES zone_geometries(id),
+    geometry        geometry(Geometry, 4326),
+    event_date      DATE NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- SEED DATA
+
+INSERT INTO users (username, password_hash, display_name, role)
+VALUES (
+    'admin',
+    '$2b$12$PLACEHOLDER_HASH_CHANGE_ON_FIRST_RUN',
+    'Administrator',
+    'admin'
+);
+
+INSERT INTO sources (key, name, category, layer_types) VALUES
+('openaq',          'OpenAQ v3',                    'air_quality',  ARRAY['aq']),
+('waqi',            'World AQI',                    'air_quality',  ARRAY['aq']),
+('iqair',           'IQAir AirVisual',              'air_quality',  ARRAY['aq']),
+('copernicus_cams', 'Copernicus CAMS',              'air_quality',  ARRAY['aq']),
+('open_meteo',      'Open-Meteo',                   'weather',      ARRAY['weather', 'precipitation']),
+('noaa_gfs',        'NOAA GFS',                     'weather',      ARRAY['weather']),
+('openweathermap',  'OpenWeatherMap',               'weather',      ARRAY['weather']),
+('copernicus_era5', 'ERA5 Reanalysis',              'climate',      ARRAY['climate']),
+('nasa_firms',      'NASA FIRMS VIIRS',             'fire',         ARRAY['fire']),
+('nasa_lance',      'NASA LANCE NRT',               'fire',         ARRAY['fire']),
+('modis_lst',       'NASA MODIS LST',               'satellite',    ARRAY['lst']),
+('modis_ndvi',      'NASA MODIS NDVI',              'satellite',    ARRAY['ndvi']),
+('sentinel2',       'Copernicus Sentinel-2',        'satellite',    ARRAY['ndvi']),
+('usgs_landsat',    'USGS Earth Explorer Landsat',  'satellite',    ARRAY['ndvi', 'lst']),
+('gfw',             'Global Forest Watch',          'vegetation',   ARRAY['ndvi']),
+('hansen',          'Hansen Forest Change',         'vegetation',   ARRAY['ndvi']),
+('gadm',            'GADM Boundaries',              'geospatial',   ARRAY['boundaries']),
+('overpass',        'OpenStreetMap Overpass',       'geospatial',   ARRAY['urban']),
+('ghsl',            'GHSL Built-up Layer',          'geospatial',   ARRAY['urban']),
+('worldpop',        'WorldPop Density',             'geospatial',   ARRAY['population']),
+('nasa_sedac',      'NASA SEDAC',                   'geospatial',   ARRAY['socioeconomic']),
+('datameet',        'Datameet India',               'geospatial',   ARRAY['boundaries']),
+('gdacs',           'GDACS Disaster Alerts',        'hazard',       ARRAY['hazard']),
+('fema_flood',      'FEMA Flood Zones',             'hazard',       ARRAY['hazard']),
+('emdat',           'EM-DAT Disaster DB',           'hazard',       ARRAY['hazard']),
+('noaa_ncei',       'NOAA NCEI Events',             'hazard',       ARRAY['hazard']);
+```
+
+---
+
+## 5. API Contracts
+
+### 5.1 Layer Current Data
+
+```
+GET /api/v1/layers/{layer_type}/current
+    ?region_id={uuid}
+    &bbox={west},{south},{east},{north}
+    &source={openaq|waqi|iqair}    (optional filter)
+
+layer_type options: aq | lst | ndvi | fire | precipitation |
+                    urban | risk | stations | boundaries
+
+Response 200:
+{
+  "status": "success",
+  "data": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": { "type": "Point", "coordinates": [77.2090, 28.6139] },
+        "properties": {
+          "station_id": "IN-DEL-001",
+          "station_name": "Anand Vihar",
+          "value": 178.4,
+          "unit": "ug/m3",
+          "aqi": 178,
+          "aqi_category": "Very Poor",
+          "observed_at": "2025-05-18T14:00:00Z",
