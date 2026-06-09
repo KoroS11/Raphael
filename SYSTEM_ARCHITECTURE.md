@@ -245,3 +245,127 @@ MapLibre configuration:
   No tile server. No CDN. No network required after download.
 ```
 
+### 3.4 Frontend Component Tree
+
+```
+App (React 18)
+|
+|-- Shell
+|   |-- TitleBar (Tauri custom titlebar)
+|   |-- Sidebar
+|   |   |-- RaphaelLogo
+|   |   |-- NavLinks
+|   |   |   |-- Explorer
+|   |   |   |-- Dashboard
+|   |   |   |-- Map Explorer
+|   |   |   |-- Live Monitoring
+|   |   |   |-- Risk Intelligence
+|   |   |   |-- Analytics
+|   |   |   |-- Alerts
+|   |   |   |-- Reports
+|   |   |   |-- Data Catalog
+|   |   |   `-- Settings
+|   |   |-- UserProfile
+|   |   `-- SystemStatusIndicator (all 5 services)
+|   |
+|   `-- TopBar
+|       |-- SearchBox (location search)
+|       |-- RegionSelector
+|       |-- TimeSlider (-7D to +30D, Kepler.gl timeline component)
+|       |-- CompareButton
+|       |-- ExportButton
+|       `-- NotificationBell (alert count badge)
+|
+|-- Views
+|   |-- ExplorerView
+|   |   |-- MapCanvas
+|   |   |   |-- MapLibreBase (PMTiles dark style)
+|   |   |   |-- DeckGLOverlay (all layer instances)
+|   |   |   |-- MapControls (zoom, compass, locate, 3D toggle)
+|   |   |   `-- CoordinateBar (lat, lon, zoom, elevation)
+|   |   |-- LayersPanel (left sidebar)
+|   |   |   |-- LayerToggle x9 (visibility + opacity slider each)
+|   |   |   |-- ColorLegend per active layer
+|   |   |   `-- BasemapSelector (dark, satellite, light, terrain thumbnails)
+|   |   `-- LocationDetailPanel (right sidebar, on map click)
+|   |       |-- IndicatorCards (all layers at clicked point)
+|   |       |-- SparklineChart (ECharts, 7-day trend per indicator)
+|   |       `-- RiskScoreBreakdown (gauge + contribution bars)
+|   |
+|   |-- DashboardView
+|   |   |-- CityOverviewCard (region name, weather, overall status)
+|   |   |-- MetricCards (AQI, LST, NDVI, Risk Score — color coded)
+|   |   |-- RecentAlertsList (last 3 triggered alerts)
+|   |   |-- AQITrendChart (ECharts 7-day line chart)
+|   |   `-- BottomPanelRow
+|   |       |-- LiveAQStationsPanel (top 5 stations table)
+|   |       |-- LSTThumbnailPanel (rasterio PNG mini-map)
+|   |       |-- NDVIThumbnailPanel (rasterio PNG mini-map)
+|   |       |-- PrecipitationChart (ECharts bar chart, Open-Meteo data)
+|   |       |-- WindWeatherPanel (ECharts radar + compass SVG)
+|   |       `-- AIInsightsPanel (3 auto-generated insight cards from ML)
+|   |
+|   |-- RiskIntelligenceView
+|   |   |-- RiskMapPanel (deck.gl choropleth from ml_outputs)
+|   |   |-- ForecastChartPanel (Prophet output, ECharts with confidence band)
+|   |   |-- AnomalyLogPanel (IsolationForest flagged events)
+|   |   `-- ExplainabilityPanel (plain-language ML output)
+|   |
+|   |-- AnalyticsView
+|   |   |-- TimeSeriesChart (ECharts, any indicator, any range)
+|   |   |-- CalendarHeatmap (ECharts heatmap, GitHub-style)
+|   |   |-- CorrelationScatter (ECharts scatter, two indicators)
+|   |   `-- BaselineDeviationChart (ECharts with event markers)
+|   |
+|   |-- ComparisonView
+|   |   |-- SplitMapPanel (two deck.gl instances side by side)
+|   |   |-- ComparisonTable (zones x indicators grid)
+|   |   |-- ZoneRankingList (sortable, color-coded)
+|   |   `-- ZoneScorecardPanel (full zone summary)
+|   |
+|   |-- AlertsView
+|   |   |-- AlertRuleBuilder (form: zone + indicator + operator + threshold)
+|   |   |-- ActiveRulesList
+|   |   `-- AlertHistoryLog (filterable, exportable CSV)
+|   |
+|   |-- ReportsView
+|   |   |-- ReportTypeSelector (Zone / Comparison / Alert / Trend / Custom)
+|   |   |-- ReportConfigPanel
+|   |   |-- GenerationStatusPanel (Prefect task progress)
+|   |   `-- ReportHistoryList (download completed PDFs)
+|   |
+|   |-- DataCatalogView
+|   |   |-- ImportWizard (Mage.ai embedded iframe on port 6789)
+|   |   |-- ImportDatasetList
+|   |   `-- DataSourceStatusGrid (sync status per source)
+|   |
+|   `-- SettingsView
+|       |-- SyncConfigPanel (Prefect schedule config)
+|       |-- StorageManagerPanel (DB size, retention policy)
+|       |-- TileManagerPanel (PMTiles bundles)
+|       |-- UserManagementPanel
+|       |-- LanguageSelector (i18next)
+|       `-- BackupRestorePanel
+```
+
+---
+
+## 4. Data Ingestion — Prefect OSS
+
+### 4.1 Flow Architecture
+
+Prefect runs as a local worker process. All 24 flows follow the same pattern:
+
+```
+Prefect scheduler triggers flow
+            |
+            v
+    +-------------------+
+    | Check connectivity |---> Offline --> Log skip, mark for retry
+    +-------------------+
+            |
+            v
+    +-------------------+
+    | Fetch from source  |---> HTTP error --> Retry x3 (exponential backoff)
+    +-------------------+
+            |
