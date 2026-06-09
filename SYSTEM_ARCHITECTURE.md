@@ -121,3 +121,127 @@ src-tauri/binaries/
 |-- python-sidecar-x86_64-pc-windows-msvc.exe
 |-- python-sidecar-x86_64-unknown-linux-gnu
 `-- python-sidecar-aarch64-apple-darwin
+```
+
+The Python sidecar bundles FastAPI, Prefect, MLflow, Mage.ai, scikit-learn, Prophet, Rasterio, and all dependencies into a single self-contained binary using PyInstaller. The frontend is embedded as a static asset bundle inside the Tauri binary.
+
+---
+
+## 3. Frontend — deck.gl + MapLibre + React
+
+### 3.1 Rendering Stack
+
+```
+Browser Canvas (WebGL 2.0)
+        |
+        v
+deck.gl 8.x rendering engine
+        |
+        +---> DeckGL React component
+        |           |
+        |           +--> HeatmapLayer        (LST - temperature gradient)
+        |           +--> ColumnLayer          (AQ PM2.5 - 3D hexagons)
+        |           +--> BitmapLayer          (NDVI - GeoTIFF overlay)
+        |           +--> ScatterplotLayer     (Fire/heat anomalies - pulsing dots)
+        |           +--> GeoJsonLayer         (Admin boundaries - neon outlines)
+        |           +--> IconLayer            (AQ monitoring stations)
+        |           +--> PolygonLayer         (Risk score zones - color coded)
+        |           +--> ScreenGridLayer      (Urban density - GHSL)
+        |           `-- ArcLayer             (Wind vectors - optional)
+        |
+        +---> MapLibre GL JS 4.x (base map)
+                    |
+                    +--> PMTiles protocol handler
+                    |     +--> Reads tile data directly from local .pmtiles file
+                    |     +--> No tile server process required
+                    |     +--> HTTP range requests to local filesystem
+                    |
+                    +--> Style definitions (dark / satellite / light / terrain)
+                    `-- Offline-capable after PMTiles bundle downloaded
+```
+
+### 3.2 Layer Rendering Specifications
+
+```
+HEATMAP LAYER — Land Surface Temperature (MODIS / Sentinel)
+------------------------------------------------------------
+deck.gl:        HeatmapLayer
+Data source:    GET /api/v1/layers/lst/current
+Color scale:    [0,0,255] (20C) -> [255,255,0] (35C) -> [255,0,0] (50C+)
+Radius pixels:  30 (auto-adjusts with zoom)
+Intensity:      1.0
+Aggregation:    MEAN
+
+COLUMN LAYER — Air Quality PM2.5 (OpenAQ / WAQI / IQAir)
+----------------------------------------------------------
+deck.gl:        ColumnLayer
+Data source:    GET /api/v1/layers/aq/current
+Color scale:    AQI category colors (Good=green, Moderate=yellow,
+                Unhealthy=orange, Very Unhealthy=red, Hazardous=purple)
+Elevation:      value * 500 (1 ug/m3 = 500 units height)
+Radius:         400 meters
+Pickable:       true
+
+BITMAP LAYER — NDVI Green Cover (Sentinel-2 / MODIS / GFW)
+------------------------------------------------------------
+deck.gl:        BitmapLayer
+Data source:    Rasterio-processed PNG tile path from raster_tiles table
+Bounds:         Region bounding box [west, south, east, north]
+Opacity:        0.65 (user-adjustable via layer panel slider)
+Colormap:       Applied server-side during raster processing
+
+SCATTER LAYER — Fire and Heat Anomalies (NASA FIRMS / LANCE)
+-------------------------------------------------------------
+deck.gl:        ScatterplotLayer
+Data source:    GET /api/v1/layers/fire/current
+Color:          [255, 50, 0, 200] pulsing animation via Framer Motion
+Radius:         500 meters
+Pickable:       true (click shows FRP value + confidence)
+
+GEOJSON LAYER — Administrative Boundaries (GADM / Datameet)
+------------------------------------------------------------
+deck.gl:        GeoJsonLayer
+Data source:    GET /api/v1/zones
+Stroke color:   [0, 180, 255, 180] (neon blue-white)
+Fill:           Transparent (or risk score choropleth when risk layer active)
+Line width:     2px
+Highlight:      true on hover
+
+SCREEN GRID LAYER — Urban Density (GHSL / WorldPop)
+----------------------------------------------------
+deck.gl:        ScreenGridLayer
+Data source:    GET /api/v1/layers/urban/current
+Cell size:      20 pixels
+Color range:    [Low density gray] -> [High density orange]
+
+ICON LAYER — AQ Monitoring Stations (OpenAQ / WAQI / CPCB)
+------------------------------------------------------------
+deck.gl:        IconLayer
+Data source:    GET /api/v1/layers/aq/stations
+Icon:           Custom SVG station marker
+Size:           24px
+Pickable:       true (click shows full station data panel)
+Label:          AQI value rendered alongside icon
+```
+
+### 3.3 Offline Map Tile Architecture
+
+```
+PMTiles Bundle Strategy
+-----------------------
+
+Global bundle (zoom 0-5):     world_base.pmtiles       (~50 MB)
+Country bundle (zoom 0-10):   {country_iso}.pmtiles     (~200-800 MB)
+City bundle (zoom 0-16):      {city_slug}.pmtiles       (~80-300 MB)
+
+India examples:
+  india_base.pmtiles           ~600 MB  (country, zoom 0-10)
+  delhi_city.pmtiles           ~120 MB  (city, zoom 0-16)
+  mumbai_city.pmtiles          ~180 MB  (city, zoom 0-16)
+
+MapLibre configuration:
+  protocol: "pmtiles"
+  source: "pmtiles://${APP_DATA}/tiles/${region}.pmtiles"
+  No tile server. No CDN. No network required after download.
+```
+
