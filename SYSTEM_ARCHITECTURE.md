@@ -493,3 +493,127 @@ FastAPI serves tile path to frontend BitmapLayer
 ```
 Triggered after every ingestion cycle OR manual request
                         |
+                        v
+            Read new observations from DB
+            (PostGIS spatial query per layer per zone)
+                        |
+            +-----------+-----------+-----------+
+            |           |           |           |
+            v           v           v           v
+      IsolationForest  KMeans   Prophet      Risk Score
+      Anomaly detect   Zone     Retrain if   Compute all
+      (all layers)     cluster  >= 10 new    zones with
+            |          update   obs          MinMaxScaler
+            |           |           |           |
+            +-----------+-----------+-----------+
+                        |
+                        v
+            Generate explainability text
+            (feature importance -> f-string template)
+                        |
+                        v
+            Write all outputs to ml_outputs table
+                        |
+                        v
+            Log experiment to MLflow (port 5000)
+                        |
+                        v
+            Invalidate FastAPI response cache
+```
+
+---
+
+## 6. Custom Import — Mage.ai
+
+Mage.ai runs as a local web process on port 6789. It is embedded in the Raphael Data Catalog view as an iframe. It handles the visual import pipeline for field-collected data.
+
+```
+Mage.ai Pipeline per Format
+----------------------------
+
+CSV Import Pipeline:
+  Block 1 (Data Loader):   Read CSV with pandas
+  Block 2 (Transformer):   Column mapper (user-defined in UI)
+  Block 3 (Transformer):   Validate lat/lon, parse timestamps, check units
+  Block 4 (Transformer):   Reproject coordinates if needed
+  Block 5 (Data Exporter): Write to raw_observations table via SQLAlchemy
+
+GeoJSON Import Pipeline:
+  Block 1:  Read GeoJSON with Fiona
+  Block 2:  Extract geometry + properties
+  Block 3:  Validate geometry type and CRS
+  Block 4:  Map properties to observation schema
+  Block 5:  Write to database
+
+KML Import Pipeline:
+  Block 1:  Parse KML with xml.etree
+  Block 2:  Extract Placemark coordinates + extended data
+  Block 3:  Validate and normalize
+  Block 4:  Write to database
+
+Shapefile Import Pipeline:
+  Block 1:  Read .shp with GeoPandas
+  Block 2:  Reproject to EPSG:4326
+  Block 3:  Extract attribute columns
+  Block 4:  Map to observation schema
+  Block 5:  Write to database
+
+Excel Import Pipeline:
+  Block 1:  Read .xlsx with openpyxl
+  Block 2:  Column mapper
+  Block 3:  Validate
+  Block 4:  Write to database
+```
+
+---
+
+## 7. Report Generation Pipeline
+
+```
+User configures report (type + sections + date range + zones)
+                    |
+                    v
+POST /api/v1/reports/generate
+                    |
+                    v
+FastAPI queues Prefect background task
+                    |
+                    v
+        +-----------+-----------+
+        |                       |
+        v                       v
+Playwright headless          Fetch all chart data
+browser captures             from PostGIS via
+deck.gl map as PNG           SQLAlchemy queries
+(at configured time              |
+ position + active layers)       v
+        |                   Render ECharts to SVG
+        |                   using pyecharts
+        |                   (server-side Python)
+        +-----------+-----------+
+                    |
+                    v
+        Generate narrative text
+        (Jinja2 template + ML explainability output)
+                    |
+                    v
+        Assemble full HTML document
+        (Jinja2 template engine)
+                    |
+                    v
+        WeasyPrint HTML -> PDF render
+        (A4, print-ready, embedded fonts)
+                    |
+                    v
+        Write to data/reports/{uuid}.pdf
+                    |
+                    v
+GET /api/v1/reports/{id}/download returns PDF binary
+```
+
+---
+
+## 8. Complete Data Flow
+
+### 8.1 Write Path (Ingestion Cycle)
+
