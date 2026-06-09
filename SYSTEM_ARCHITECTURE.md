@@ -617,3 +617,127 @@ GET /api/v1/reports/{id}/download returns PDF binary
 
 ### 8.1 Write Path (Ingestion Cycle)
 
+```
+Prefect flow triggered (scheduled or manual)
+      |
+      v
+HTTP request to external source (OpenAQ / NASA / etc.)
+      |
+      v
+Rasterio processes GeoTIFF if applicable
+      |
+      v
+pandas / GeoPandas normalizes data
+      |
+      v
+SQLAlchemy bulk INSERT to PostGIS / SpatiaLite
+  INSERT INTO raw_observations
+  (source_id, region_id, layer_type, geometry, value, observed_at)
+  VALUES ... (batched, 1000 rows per transaction)
+      |
+      v
+Prophet + IsolationForest + KMeans + risk scorer run
+      |
+      v
+INSERT INTO ml_outputs (zone_id, model_type, value, explanation)
+      |
+      v
+MLflow logs run (experiment_id, params, metrics, model artifact)
+      |
+      v
+FastAPI cache invalidated
+      |
+      v
+TanStack Query refetches on next user interaction
+```
+
+### 8.2 Read Path (User Views Map)
+
+```
+User opens Map Explorer, enables AQ layer
+      |
+      v
+TanStack Query fires:
+GET http://localhost:8000/api/v1/layers/aq/current
+    ?region_id={uuid}&bbox={w,s,e,n}
+      |
+      v
+FastAPI JWT middleware validates session token
+      |
+      v
+SQLAlchemy + GeoAlchemy2 executes spatial query:
+
+SELECT
+  ST_AsGeoJSON(geometry) as geom,
+  value, unit, station_name, observed_at, is_anomalous
+FROM raw_observations
+WHERE layer_type = 'aq'
+  AND region_id = :region_id
+  AND ST_Within(geometry, ST_MakeEnvelope(:w,:s,:e,:n, 4326))
+  AND observed_at >= NOW() - INTERVAL '6 hours'
+ORDER BY observed_at DESC
+
+(GIST index on geometry ensures this runs in milliseconds)
+      |
+      v
+FastAPI serializes to GeoJSON FeatureCollection
+      |
+      v
+TanStack Query caches response, updates Zustand dataStore
+      |
+      v
+deck.gl ColumnLayer receives GeoJSON feature array
+      |
+      v
+WebGL renders 3D columns on MapLibre base map
+      |
+      v
+User sees live AQ visualization
+```
+
+---
+
+## 9. Security Model
+
+**Authentication**
+JWT tokens signed with a locally generated secret (32-byte random, generated at first launch, stored in app data directory). Tokens expire after 8 hours of inactivity.
+
+**Password Storage**
+bcrypt with cost factor 12. Never stored or logged in plain text.
+
+**Network Binding**
+FastAPI, MLflow, Prefect, and Mage.ai all bind exclusively to 127.0.0.1. Not accessible from any other machine on the network.
+
+**Database**
+Optional SQLCipher encryption for the SpatiaLite database file. Enabled from the settings panel for deployments where physical device security is a concern.
+
+---
+
+## 10. Build and Packaging
+
+```
+BUILD OUTPUT
+------------
+
+Source: All code in repository
+Commands:
+  npm install
+  pip install -r backend/requirements.txt
+  npm run tauri build
+
+Output:
+  Windows:  src-tauri/target/release/bundle/nsis/raphael_setup.exe
+  Linux:    src-tauri/target/release/bundle/appimage/raphael.AppImage
+  macOS:    src-tauri/target/release/bundle/dmg/raphael.dmg
+
+INSTALLED SIZE ESTIMATES
+-------------------------
+Tauri shell + React bundle:        ~30 MB
+Python sidecar (all deps):         ~450 MB
+World base PMTiles (zoom 0-5):     ~50 MB
+India PMTiles (zoom 0-10):         ~600 MB
+Delhi city PMTiles (zoom 0-16):    ~120 MB
+GADM India boundaries:             ~50 MB
+Total (India + Delhi):             ~1.3 GB
+Total (single city only):          ~700 MB
+```

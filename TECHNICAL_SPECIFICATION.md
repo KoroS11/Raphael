@@ -1029,3 +1029,210 @@ def train_and_forecast(zone_id: str, layer_type: str, horizon_hours: int = 48) -
 ```python
 # backend/ml/anomaly.py
 
+from sklearn.ensemble import IsolationForest
+import pandas as pd
+import numpy as np
+from ..db.queries import get_rolling_observations
+from ..config import ML_CONFIG
+
+def detect_anomalies(region_id: str, layer_type: str) -> list[dict]:
+    cfg = ML_CONFIG["anomaly"]["isolation_forest"]
+    window_days = cfg["rolling_window_days"]
+
+    obs = get_rolling_observations(region_id, layer_type, days=window_days)
+    if not obs:
+        return []
+
+    df = pd.DataFrame(obs, columns=["id", "value", "hour", "day_of_week"])
+    X = df[["value", "hour", "day_of_week"]].values
+
+    clf = IsolationForest(
+        n_estimators=cfg["n_estimators"],
+        contamination=cfg["contamination"],
+        random_state=cfg["random_state"]
+    )
+    scores = clf.fit_predict(X)
+    anomaly_scores = clf.score_samples(X)
+
+    results = []
+    for i, row in df.iterrows():
+        if scores[i] == -1:
+            results.append({
+                "observation_id": row["id"],
+                "anomaly_score": float(anomaly_scores[i]),
+                "is_anomalous": True
+            })
+    return results
+```
+
+### 6.3 Composite Risk Score
+
+```python
+# backend/ml/risk_score.py
+
+from sklearn.preprocessing import MinMaxScaler
+import numpy as np
+from ..config import ML_CONFIG
+
+W = ML_CONFIG["risk_score"]
+
+def compute_risk_scores(zone_data: list[dict]) -> list[dict]:
+    if not zone_data:
+        return []
+
+    aq   = np.array([z.get("aq_mean",   0) for z in zone_data]).reshape(-1,1)
+    lst  = np.array([z.get("lst_mean",  0) for z in zone_data]).reshape(-1,1)
+    ndvi = np.array([z.get("ndvi_mean", 0) for z in zone_data]).reshape(-1,1)
+
+    scaler = MinMaxScaler()
+    aq_n   = scaler.fit_transform(aq).flatten()
+    lst_n  = scaler.fit_transform(lst).flatten()
+    ndvi_n = 1 - scaler.fit_transform(ndvi).flatten()  # invert: low = high risk
+
+    scores = (W["weight_aqi"] * aq_n + W["weight_lst"] * lst_n + W["weight_ndvi"] * ndvi_n) * 100
+
+    return [
+        {
+            "zone_id": zone_data[i]["zone_id"],
+            "risk_score": round(float(scores[i]), 1),
+            "category": _categorize(scores[i]),
+            "explanation": _explain(aq_n[i], lst_n[i], ndvi_n[i]),
+            "contributions": {
+                "aq":   round(W["weight_aqi"]  * aq_n[i]   * 100, 1),
+                "lst":  round(W["weight_lst"]  * lst_n[i]  * 100, 1),
+                "ndvi": round(W["weight_ndvi"] * ndvi_n[i] * 100, 1)
+            }
+        }
+        for i in range(len(zone_data))
+    ]
+
+def _categorize(score: float) -> str:
+    if score >= 85: return "Critical Risk"
+    if score >= 70: return "High Risk"
+    if score >= 50: return "Moderate Risk"
+    if score >= 30: return "Low Risk"
+    return "Minimal Risk"
+
+def _explain(aq_n, lst_n, ndvi_n) -> str:
+    parts = []
+    if aq_n   > 0.7: parts.append("very poor air quality")
+    elif aq_n > 0.4: parts.append("elevated air quality index")
+    if lst_n   > 0.7: parts.append("high land surface temperature")
+    elif lst_n > 0.4: parts.append("above-average surface heat")
+    if ndvi_n  > 0.7: parts.append("critically low green cover")
+    elif ndvi_n > 0.4: parts.append("below-average vegetation")
+    if not parts:
+        return "Environmental indicators within acceptable ranges."
+    return "Risk elevated due to " + ", ".join(parts) + "."
+```
+
+---
+
+## 7. Build Instructions
+
+### 7.1 Development Setup
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/raphael.git
+cd raphael
+
+# 2. Install frontend dependencies
+npm install
+
+# 3. Install Python backend dependencies
+python -m venv backend/.venv
+source backend/.venv/bin/activate
+# Windows: backend\.venv\Scripts\activate
+pip install -r backend/requirements.txt
+
+# 4. Install Playwright browser for report rendering
+playwright install chromium
+
+# 5. Initialize database with seed data
+python scripts/seed.py --mode dev
+
+# 6. Run all services in development mode
+npm run tauri dev
+# This starts: Vite dev server, FastAPI, Prefect, MLflow, Mage.ai
+# and opens the Tauri window
+```
+
+### 7.2 Production Build
+
+```bash
+# Produces installer for current OS
+npm run tauri build
+
+# Output:
+# Windows:  src-tauri/target/release/bundle/nsis/raphael_1.0.0_x64-setup.exe
+# Linux:    src-tauri/target/release/bundle/appimage/raphael_1.0.0_amd64.AppImage
+# macOS:    src-tauri/target/release/bundle/dmg/raphael_1.0.0_x64.dmg
+```
+
+### 7.3 GitHub Actions CI
+
+```yaml
+# .github/workflows/build.yml
+name: Build Raphael
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm install
+      - run: pip install -r backend/requirements.txt
+      - run: playwright install chromium
+      - run: npm run tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raphael-${{ matrix.os }}
+          path: src-tauri/target/release/bundle/**/*
+```
+
+---
+
+## 8. Testing Strategy
+
+```
+tests/
+|-- ingestion/
+|   |-- test_openaq_flow.py         Mock HTTP, verify DB writes
+|   |-- test_waqi_flow.py
+|   |-- test_iqair_flow.py
+|   |-- test_firms_flow.py
+|   |-- test_raster_pipeline.py     Sample GeoTIFF processing via Rasterio
+|   `-- test_validation.py
+|
+|-- ml/
+|   |-- test_forecast.py            Prophet with synthetic time series
+|   |-- test_anomaly.py             IsolationForest with known anomalies
+|   |-- test_risk_score.py          Known inputs -> expected score
+|   |-- test_clustering.py          KMeans zone grouping
+|   `-- test_explainer.py
+|
+|-- api/
+|   |-- test_layers.py              Response format, GeoJSON structure
+|   |-- test_zones.py               Spatial query correctness
+|   |-- test_forecasts.py
+|   |-- test_alerts.py              Rule evaluation, event creation
+|   |-- test_reports.py             PDF generation, WeasyPrint output
+|   `-- test_auth.py                JWT issuance, role enforcement
+|
+`-- conftest.py                     In-memory SpatiaLite DB, HTTP mocks
+```
+
+All tests run against an in-memory SpatiaLite database. All external HTTP calls are mocked using httpx mock transports. No real API calls are made during the test suite.
