@@ -289,3 +289,76 @@ async def status():
     db_ok = False
     try:
         with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        pass
+
+    prefect_ok  = await check_service("http://localhost:4200/health")
+    mlflow_ok   = await check_service("http://localhost:5000/health")
+    mage_ok     = await check_service("http://localhost:6789/api/status")
+
+    return {
+        "status": "success",
+        "data": {
+            "database": {"healthy": db_ok,      "engine": "spatialite" if IS_SPATIALITE else "postgis"},
+            "prefect":  {"healthy": prefect_ok, "port": 4200},
+            "mlflow":   {"healthy": mlflow_ok,  "port": 5000},
+            "mage":     {"healthy": mage_ok,    "port": 6789},
+        }
+    }
+
+@router.post("/sync")
+async def trigger_sync(_user = None):
+    # Trigger Prefect flow runs via Prefect API
+    async with httpx.AsyncClient() as client:
+        await client.post("http://localhost:4200/api/deployments/run/all")
+    return {"status": "success", "data": {"triggered": True}}
+```
+
+---
+
+## Step 7 — Create the Users and Auth Route
+
+Create `backend/api/routes/users.py`:
+
+```python
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from db.connection import get_db
+from db.models import User
+from api.auth import verify_password, hash_password, create_token, require_role
+import uuid
+
+router = APIRouter()
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class CreateUserRequest(BaseModel):
+    username:     str
+    password:     str
+    display_name: str
+    role:         str
+    organization: str = ""
+
+@router.post("/auth/login")
+async def login(req: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == req.username).first()
+    if not user or not verify_password(req.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_token(str(user.id))
+    return {
+        "status": "success",
+        "data": {
+            "token":        token,
+            "user_id":      str(user.id),
+            "display_name": user.display_name,
+            "role":         user.role
+        }
+    }
+
+@router.get("/")
+async def list_users(

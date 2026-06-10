@@ -562,3 +562,144 @@ def lst_modis_flow():
     if not granules:
         print("No MODIS LST granules found for today. Trying yesterday.")
         from datetime import timedelta
+        target_date = date.today() - timedelta(days=1)
+        granules    = search_granules(bbox, target_date)
+    if granules:
+        tile_path = process_lst_granule(granules[0], bbox)
+        write_tile_metadata(tile_path, bbox, target_date)
+        print(f"LST tile processed: {tile_path}")
+    else:
+        print("No MODIS LST granules available.")
+```
+
+---
+
+## Step 7 — Implement Boundary and Geospatial Flows
+
+### Flow — GADM Boundaries
+
+Create `backend/ingestion/flows/boundaries_gadm.py`:
+
+```python
+from prefect import flow, task
+import httpx, os, uuid
+from pathlib import Path
+from ingestion.base import BaseIngestionFlow
+
+class GADMFlow(BaseIngestionFlow):
+    source_key = "gadm"
+    layer_type  = "boundaries"
+
+@task(name="download-gadm-boundaries")
+def download_gadm(country_iso3: str) -> Path:
+    data_dir = Path(os.getenv("RAPHAEL_DATA_DIR", "./data")) / "boundaries"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    out_file = data_dir / f"gadm41_{country_iso3}.gpkg"
+
+    if out_file.exists():
+        print(f"GADM file already exists: {out_file}")
+        return out_file
+
+    url = f"https://geodata.ucdavis.edu/gadm/gadm4.1/gpkg/gadm41_{country_iso3}.gpkg"
+    print(f"Downloading GADM boundaries for {country_iso3}...")
+    with httpx.stream("GET", url, timeout=300, follow_redirects=True) as r:
+        r.raise_for_status()
+        with open(out_file, "wb") as f:
+            for chunk in r.iter_bytes(chunk_size=8192):
+                f.write(chunk)
+    print(f"Downloaded: {out_file} ({out_file.stat().st_size / 1e6:.1f} MB)")
+    return out_file
+
+@task(name="import-gadm-to-db")
+def import_gadm_to_db(gpkg_path: Path, region_id: str, admin_levels: list = [2, 3]):
+    import geopandas as gpd
+    from db.connection import SessionLocal
+    from db.models import ZoneGeometry
+    from geoalchemy2.shape import from_shape
+    import uuid
+
+    db = SessionLocal()
+
+    for level in admin_levels:
+        layer = f"ADM_ADM_{level}"
+        try:
+            gdf = gpd.read_file(gpkg_path, layer=layer)
+            gdf = gdf.to_crs("EPSG:4326")
+        except Exception as e:
+            print(f"Could not read layer {layer}: {e}")
+            continue
+
+        zones = []
+        for _, row in gdf.iterrows():
+            name_col  = f"NAME_{level}"
+            gadm_col  = f"GID_{level}"
+            zone = ZoneGeometry(
+                id=uuid.uuid4(),
+                region_id=region_id,
+                admin_level=level,
+                name=str(row.get(name_col, "")),
+                gadm_gid=str(row.get(gadm_col, "")),
+                geometry=from_shape(row.geometry, srid=4326),
+                source="gadm"
+            )
+            zones.append(zone)
+
+        db.bulk_save_objects(zones)
+        db.commit()
+        print(f"Imported {len(zones)} zones at admin level {level}")
+
+    db.close()
+
+@flow(name="gadm-boundary-ingestion")
+def gadm_flow(country_iso3: str = "IND"):
+    from db.connection import SessionLocal
+    from db.models import Region
+    db       = SessionLocal()
+    region   = db.query(Region).filter(Region.is_active == True).first()
+    db.close()
+
+    gpkg_path = download_gadm(country_iso3)
+    import_gadm_to_db(gpkg_path, str(region.id), admin_levels=[2, 3])
+    print("GADM boundary import complete")
+
+if __name__ == "__main__":
+    gadm_flow("IND")
+```
+
+---
+
+## Step 8 — Implement Hazard Flow
+
+Create `backend/ingestion/flows/hazard_gdacs.py`:
+
+```python
+from prefect import flow, task
+import httpx, uuid, xmltodict
+from datetime import datetime, timezone
+from ingestion.base import BaseIngestionFlow
+
+GDACS_RSS = "https://www.gdacs.org/xml/rss.xml"
+
+class GDACSFlow(BaseIngestionFlow):
+    source_key = "gdacs"
+    layer_type  = "hazard"
+
+@task(name="fetch-gdacs-alerts", retries=3)
+def fetch_gdacs() -> list:
+    r = httpx.get(GDACS_RSS, timeout=30)
+    parsed = xmltodict.parse(r.text)
+    items  = parsed.get("rss", {}).get("channel", {}).get("item", [])
+    return items if isinstance(items, list) else [items]
+
+@task(name="write-gdacs-to-db")
+def write_gdacs(items: list):
+    flow_obj = GDACSFlow()
+    observations = []
+    for item in items:
+        try:
+            lat = float(item.get("geo:lat", 0))
+            lon = float(item.get("geo:long", 0))
+            alert_level = item.get("gdacs:alertlevel", "Green")
+            severity_map = {"Green": 1.0, "Orange": 2.0, "Red": 3.0}
+            value = severity_map.get(alert_level, 1.0)
+        except Exception:
