@@ -139,3 +139,144 @@ def fetch_measurements(location_id: int) -> list:
     headers  = {"X-API-Key": API_KEY} if API_KEY else {}
     data = flow_obj.fetch(
         f"{BASE_URL}/measurements",
+        params={"location_id": location_id, "parameter": "pm25", "limit": 24},
+        headers=headers
+    )
+    return data.get("results", [])
+
+@task(name="write-openaq-to-db")
+def write_to_db(locations: list, flow_obj: OpenAQFlow):
+    observations = []
+    for loc in locations:
+        for sensor in loc.get("sensors", []):
+            latest = sensor.get("latest", {})
+            if not latest.get("value"):
+                continue
+            observations.append({
+                "id":           uuid.uuid4(),
+                "source_id":    flow_obj.source.id,
+                "region_id":    flow_obj.region.id,
+                "layer_type":   "aq",
+                "geometry":     flow_obj.normalize_point(
+                                    loc["coordinates"]["latitude"],
+                                    loc["coordinates"]["longitude"]
+                                ),
+                "value":        float(latest["value"]),
+                "unit":         "ug/m3",
+                "station_id":   str(loc["id"]),
+                "station_name": loc.get("name", ""),
+                "observed_at":  datetime.fromisoformat(
+                                    latest["datetime"].replace("Z", "+00:00")
+                                ) if latest.get("datetime") else datetime.now(timezone.utc),
+                "raw_payload":  latest
+            })
+    flow_obj.bulk_write(observations)
+    flow_obj.update_source_sync_time()
+    return len(observations)
+
+@flow(name="openaq-ingestion", log_prints=True)
+def openaq_flow():
+    flow_obj = OpenAQFlow()
+    if not flow_obj.region:
+        print("No active region configured. Skipping.")
+        return
+
+    bbox = flow_obj.db.execute(
+        "SELECT ST_XMin(bbox), ST_YMin(bbox), ST_XMax(bbox), ST_YMax(bbox) FROM regions WHERE is_active = true"
+    ).fetchone()
+
+    locations = fetch_locations(tuple(bbox))
+    print(f"Found {len(locations)} OpenAQ stations")
+    count = write_to_db(locations, flow_obj)
+    print(f"Wrote {count} observations")
+    flow_obj.close()
+
+if __name__ == "__main__":
+    openaq_flow()
+```
+
+### Flow 2 — WAQI
+
+Create `backend/ingestion/flows/aq_waqi.py`:
+
+```python
+from prefect import flow, task
+import os, uuid
+from datetime import datetime, timezone
+from ingestion.base import BaseIngestionFlow
+
+BASE_URL = "https://api.waqi.info"
+API_KEY  = os.getenv("WAQI_API_KEY", "")
+
+class WAQIFlow(BaseIngestionFlow):
+    source_key = "waqi"
+    layer_type  = "aq"
+
+@task(name="fetch-waqi-stations", retries=3)
+def fetch_waqi_stations(bbox: tuple) -> list:
+    if not API_KEY:
+        return []
+    flow_obj = WAQIFlow()
+    south, west, north, east = bbox[1], bbox[0], bbox[3], bbox[2]
+    data = flow_obj.fetch(
+        f"{BASE_URL}/map/bounds/",
+        params={"latlng": f"{south},{west},{north},{east}", "token": API_KEY}
+    )
+    return data.get("data", [])
+
+@task(name="write-waqi-to-db")
+def write_waqi_to_db(stations: list):
+    flow_obj = WAQIFlow()
+    observations = []
+    for station in stations:
+        if station.get("aqi") == "-":
+            continue
+        try:
+            aqi = float(station["aqi"])
+        except (ValueError, TypeError):
+            continue
+        observations.append({
+            "id":           uuid.uuid4(),
+            "source_id":    flow_obj.source.id,
+            "region_id":    flow_obj.region.id,
+            "layer_type":   "aq",
+            "geometry":     flow_obj.normalize_point(station["lat"], station["lon"]),
+            "value":        aqi,
+            "unit":         "AQI",
+            "station_id":   str(station["uid"]),
+            "station_name": station.get("station", {}).get("name", ""),
+            "observed_at":  datetime.now(timezone.utc),
+            "raw_payload":  station
+        })
+    flow_obj.bulk_write(observations)
+    flow_obj.update_source_sync_time()
+    flow_obj.close()
+
+@flow(name="waqi-ingestion")
+def waqi_flow():
+    flow_obj = WAQIFlow()
+    bbox = (76.8, 28.4, 77.4, 28.9)  # Loaded from active region in production
+    stations = fetch_waqi_stations(bbox)
+    print(f"Fetched {len(stations)} WAQI stations")
+    write_waqi_to_db(stations)
+    flow_obj.close()
+```
+
+### Flow 3 — IQAir
+
+Create `backend/ingestion/flows/aq_iqair.py`:
+
+```python
+from prefect import flow, task
+import os, uuid
+from datetime import datetime, timezone
+from ingestion.base import BaseIngestionFlow
+
+BASE_URL = "https://api.airvisual.com/v2"
+API_KEY  = os.getenv("IQAIR_API_KEY", "")
+
+class IQAirFlow(BaseIngestionFlow):
+    source_key = "iqair"
+    layer_type  = "aq"
+
+@task(name="fetch-iqair-nearest", retries=3)

@@ -70,3 +70,76 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from db.connection import get_db
+from db.models import User
+
+SECRET_KEY   = os.getenv("RAPHAEL_SECRET_KEY", "change-me-in-production")
+ALGORITHM    = "HS256"
+TOKEN_EXPIRE = timedelta(hours=8)
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security    = HTTPBearer()
+
+def create_token(user_id: str) -> str:
+    expire = datetime.now(timezone.utc) + TOKEN_EXPIRE
+    return jwt.encode({"sub": user_id, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+def hash_password(plain: str) -> str:
+    return pwd_context.hash(plain)
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+def require_role(*roles: str):
+    async def checker(current_user: User = Depends(get_current_user)):
+        if current_user.role not in roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return current_user
+    return checker
+```
+
+---
+
+## Step 3 — Create Pydantic Response Models
+
+Create `backend/api/models/responses.py`:
+
+```python
+from pydantic import BaseModel
+from typing import Any, Optional, List
+from datetime import datetime
+
+class Meta(BaseModel):
+    timestamp:   datetime = datetime.utcnow()
+    last_synced: Optional[datetime] = None
+    source:      Optional[str]      = None
+    count:       Optional[int]      = None
+    model_version: Optional[str]    = None
+
+class APIResponse(BaseModel):
+    status: str = "success"
+    data:   Any = None
+    meta:   Meta = Meta()
+    errors: List[dict] = []
+
+class ErrorResponse(BaseModel):
+    status: str = "error"
+    data:   None = None
+    meta:   Meta = Meta()
