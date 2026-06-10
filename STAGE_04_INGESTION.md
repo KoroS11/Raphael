@@ -421,3 +421,144 @@ from prefect import flow, task
 import os, uuid, csv, io
 from datetime import datetime, timezone
 from ingestion.base import BaseIngestionFlow
+
+BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api"
+MAP_KEY  = os.getenv("NASA_FIRMS_KEY", "")
+
+class FIRMSFlow(BaseIngestionFlow):
+    source_key = "nasa_firms"
+    layer_type  = "fire"
+
+@task(name="fetch-firms-fires", retries=3)
+def fetch_fires(bbox: tuple) -> list:
+    if not MAP_KEY:
+        print("No NASA FIRMS key configured. Skipping.")
+        return []
+    flow_obj = FIRMSFlow()
+    west, south, east, north = bbox
+    bbox_str = f"{west},{south},{east},{north}"
+    url = f"{BASE_URL}/area/csv/{MAP_KEY}/VIIRS_SNPP_NRT/{bbox_str}/1"
+    response = flow_obj.fetch(url)
+    # FIRMS returns CSV, not JSON
+    import httpx
+    r = httpx.get(url, timeout=30)
+    reader = csv.DictReader(io.StringIO(r.text))
+    return list(reader)
+
+@task(name="write-firms-to-db")
+def write_firms(fires: list):
+    if not fires:
+        return
+    flow_obj = FIRMSFlow()
+    observations = []
+    for fire in fires:
+        try:
+            lat = float(fire.get("latitude",  0))
+            lon = float(fire.get("longitude", 0))
+            frp = float(fire.get("frp",       0))
+        except (ValueError, TypeError):
+            continue
+
+        observations.append({
+            "id":           uuid.uuid4(),
+            "source_id":    flow_obj.source.id,
+            "region_id":    flow_obj.region.id,
+            "layer_type":   "fire",
+            "geometry":     flow_obj.normalize_point(lat, lon),
+            "value":        frp,
+            "unit":         "MW",
+            "station_name": f"FIRMS_{fire.get('confidence','')}_conf",
+            "observed_at":  datetime.now(timezone.utc),
+            "raw_payload":  dict(fire)
+        })
+
+    flow_obj.bulk_write(observations)
+    flow_obj.update_source_sync_time()
+    flow_obj.close()
+    print(f"Wrote {len(observations)} fire detections")
+
+@flow(name="firms-ingestion")
+def firms_flow():
+    bbox = (76.8, 28.4, 77.4, 28.9)
+    fires = fetch_fires(bbox)
+    print(f"Fetched {len(fires)} FIRMS detections")
+    write_firms(fires)
+```
+
+---
+
+## Step 6 — Implement Satellite Imagery Flow (LST)
+
+Create `backend/ingestion/flows/lst_modis.py`:
+
+```python
+from prefect import flow, task
+import os, uuid, tempfile
+from datetime import date, datetime, timezone
+from ingestion.base import BaseIngestionFlow
+
+class MODISLSTFlow(BaseIngestionFlow):
+    source_key = "modis_lst"
+    layer_type  = "lst"
+
+@task(name="search-modis-granules", retries=2)
+def search_granules(bbox: tuple, target_date: date) -> list:
+    import httpx
+    username = os.getenv("EARTHDATA_USERNAME", "")
+    password = os.getenv("EARTHDATA_PASSWORD", "")
+    if not username:
+        return []
+
+    west, south, east, north = bbox
+    r = httpx.get(
+        "https://cmr.earthdata.nasa.gov/search/granules.json",
+        params={
+            "short_name":     "MOD11A1",
+            "version":        "061",
+            "temporal":       f"{target_date},{target_date}",
+            "bounding_box":   f"{west},{south},{east},{north}",
+            "page_size":      5
+        },
+        auth=(username, password),
+        timeout=30
+    )
+    return r.json().get("feed", {}).get("entry", [])
+
+@task(name="download-and-process-lst", retries=1)
+def process_lst_granule(granule: dict, bbox: tuple) -> str:
+    # Download HDF4, process with Rasterio, return PNG tile path
+    # Full Rasterio pipeline is implemented in Stage 05
+    # This task is a stub that will be completed in Stage 05
+    return ""
+
+@task(name="write-lst-tile-metadata")
+def write_tile_metadata(tile_path: str, bbox: tuple, target_date: date):
+    if not tile_path:
+        return
+    from db.connection import SessionLocal
+    from db.models import RasterTile, Region
+    import uuid
+    db = SessionLocal()
+    region = db.query(Region).filter(Region.is_active == True).first()
+    tile = RasterTile(
+        id=uuid.uuid4(),
+        layer_type="lst",
+        region_id=region.id,
+        tile_path=tile_path,
+        processed_at=datetime.now(timezone.utc),
+        valid_date=target_date,
+        resolution_m=1000,
+        source="modis_lst"
+    )
+    db.add(tile)
+    db.commit()
+    db.close()
+
+@flow(name="modis-lst-ingestion")
+def lst_modis_flow():
+    bbox        = (76.8, 28.4, 77.4, 28.9)
+    target_date = date.today()
+    granules    = search_granules(bbox, target_date)
+    if not granules:
+        print("No MODIS LST granules found for today. Trying yesterday.")
+        from datetime import timedelta

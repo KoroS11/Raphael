@@ -216,3 +216,76 @@ async def get_layer_history(
     to_date:    str = Query(...),
     db: Session = Depends(get_db),
     _user = Depends(get_current_user)
+):
+    # Implementation: query raw_observations for point location over date range
+    pass
+
+@router.get("/{layer_type}/forecast")
+async def get_layer_forecast(
+    layer_type: str,
+    zone_id:    str = Query(...),
+    hours:      int = Query(48),
+    db: Session = Depends(get_db),
+    _user = Depends(get_current_user)
+):
+    # Implementation: query ml_outputs for forecast rows, return with confidence bands
+    pass
+
+@router.get("/composite/risk")
+async def get_risk_scores(
+    region_id: str = Query(...),
+    db: Session = Depends(get_db),
+    _user = Depends(get_current_user)
+):
+    # Implementation: query ml_outputs where model_type = 'risk_score'
+    pass
+```
+
+Implement the remaining route files — `regions.py`, `zones.py`, `alerts.py`, `imports.py`, `reports.py`, `users.py`, `system.py` — following the same pattern. Every endpoint from `docs/SYSTEM_ARCHITECTURE.md` Section 6.2 must exist, even if the body returns an empty response at this stage. Stub responses are acceptable; missing routes are not.
+
+---
+
+## Step 5 — Create Dependency Injection
+
+Create `backend/api/deps.py`:
+
+```python
+from typing import Generator
+from sqlalchemy.orm import Session
+from db.connection import get_db
+
+def get_database() -> Generator[Session, None, None]:
+    yield from get_db()
+```
+
+---
+
+## Step 6 — Create the System Status Route
+
+Create `backend/api/routes/system.py`:
+
+```python
+from fastapi import APIRouter
+from sqlalchemy import text
+from db.connection import engine, IS_SPATIALITE
+import httpx
+
+router = APIRouter()
+
+async def check_service(url: str) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(url)
+            return r.status_code == 200
+    except Exception:
+        return False
+
+@router.get("/health")
+async def health():
+    return {"status": "ok"}
+
+@router.get("/status")
+async def status():
+    db_ok = False
+    try:
+        with engine.connect() as conn:
