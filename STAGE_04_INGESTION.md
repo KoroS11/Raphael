@@ -703,3 +703,144 @@ def write_gdacs(items: list):
             severity_map = {"Green": 1.0, "Orange": 2.0, "Red": 3.0}
             value = severity_map.get(alert_level, 1.0)
         except Exception:
+            continue
+
+        observations.append({
+            "id":           uuid.uuid4(),
+            "source_id":    flow_obj.source.id,
+            "region_id":    flow_obj.region.id,
+            "layer_type":   "hazard",
+            "geometry":     flow_obj.normalize_point(lat, lon),
+            "value":        value,
+            "unit":         "severity",
+            "station_name": item.get("title", "GDACS Alert"),
+            "observed_at":  datetime.now(timezone.utc),
+            "raw_payload":  {"title": item.get("title"), "level": alert_level}
+        })
+
+    flow_obj.bulk_write(observations)
+    flow_obj.update_source_sync_time()
+    flow_obj.close()
+
+@flow(name="gdacs-hazard-ingestion")
+def gdacs_flow():
+    items = fetch_gdacs()
+    print(f"Fetched {len(items)} GDACS alerts")
+    write_gdacs(items)
+```
+
+---
+
+## Step 9 — Create the Flow Scheduler
+
+Create `backend/ingestion/scheduler.py`:
+
+```python
+from prefect import serve
+from flows.aq_openaq         import openaq_flow
+from flows.aq_waqi           import waqi_flow
+from flows.aq_iqair          import iqair_flow
+from flows.weather_openmeteo import openmeteo_flow
+from flows.fire_firms        import firms_flow
+from flows.boundaries_gadm   import gadm_flow
+from flows.hazard_gdacs      import gdacs_flow
+from flows.lst_modis         import lst_modis_flow
+from prefect.schedules       import IntervalSchedule
+from datetime                import timedelta
+
+if __name__ == "__main__":
+    serve(
+        openaq_flow.to_deployment(
+            name="openaq-hourly",
+            schedule=IntervalSchedule(interval=timedelta(hours=1))
+        ),
+        waqi_flow.to_deployment(
+            name="waqi-hourly",
+            schedule=IntervalSchedule(interval=timedelta(hours=1))
+        ),
+        iqair_flow.to_deployment(
+            name="iqair-hourly",
+            schedule=IntervalSchedule(interval=timedelta(hours=1))
+        ),
+        openmeteo_flow.to_deployment(
+            name="openmeteo-hourly",
+            schedule=IntervalSchedule(interval=timedelta(hours=1))
+        ),
+        firms_flow.to_deployment(
+            name="firms-3hourly",
+            schedule=IntervalSchedule(interval=timedelta(hours=3))
+        ),
+        gdacs_flow.to_deployment(
+            name="gdacs-hourly",
+            schedule=IntervalSchedule(interval=timedelta(hours=1))
+        ),
+        lst_modis_flow.to_deployment(
+            name="modis-lst-daily",
+            schedule=IntervalSchedule(interval=timedelta(hours=24))
+        ),
+    )
+```
+
+---
+
+## Step 10 — Run All Flows Manually for First Sync
+
+With Prefect server running in one terminal, run each flow manually to seed the database:
+
+```
+cd backend
+python -m ingestion.flows.boundaries_gadm    # Run first — zones needed by all others
+python -m ingestion.flows.aq_openaq
+python -m ingestion.flows.aq_waqi
+python -m ingestion.flows.weather_openmeteo
+python -m ingestion.flows.fire_firms
+python -m ingestion.flows.hazard_gdacs
+```
+
+Then start the scheduler for ongoing automated sync:
+```
+python -m ingestion.scheduler
+```
+
+---
+
+## Step 11 — Stub Out Remaining Flows
+
+Create stub files for all remaining flows. Each stub must import correctly and have a `@flow` decorated function that prints a status message. Full implementation follows in Stage 05 for raster flows.
+
+Flows to stub:
+```
+backend/ingestion/flows/
+  aq_cams.py
+  weather_noaa_gfs.py
+  weather_openweathermap.py
+  fire_lance.py
+  ndvi_sentinel.py
+  ndvi_modis.py
+  ndvi_gfw.py
+  ndvi_hansen.py
+  urban_ghsl.py
+  pop_worldpop.py
+  sedac_socioeco.py
+  hazard_fema.py
+  hazard_emdat.py
+  hazard_noaa_ncei.py
+  imagery_usgs.py
+```
+
+---
+
+## Verification Checklist
+
+```
+Prefect server running at localhost:4200
+All flow files exist in backend/ingestion/flows/
+gadm_flow runs and inserts zone_geometries rows
+openaq_flow runs and inserts raw_observations with layer_type='aq'
+waqi_flow runs and inserts raw_observations with layer_type='aq'
+openmeteo_flow runs and inserts weather observations
+firms_flow runs (may return 0 fires if region is clear — acceptable)
+gdacs_flow runs and inserts any active alerts
+FastAPI GET /api/v1/layers/aq/current returns features (not empty)
+Prefect UI shows successful flow runs at localhost:4200
+```

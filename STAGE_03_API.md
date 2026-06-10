@@ -362,3 +362,76 @@ async def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 @router.get("/")
 async def list_users(
+    db: Session = Depends(get_db),
+    _user = Depends(require_role("admin"))
+):
+    users = db.query(User).all()
+    return {"status": "success", "data": [
+        {"id": str(u.id), "username": u.username,
+         "role": u.role, "display_name": u.display_name}
+        for u in users
+    ]}
+
+@router.post("/")
+async def create_user(
+    req: CreateUserRequest,
+    db:  Session = Depends(get_db),
+    _user = Depends(require_role("admin"))
+):
+    user = User(
+        id=uuid.uuid4(),
+        username=req.username,
+        password_hash=hash_password(req.password),
+        display_name=req.display_name,
+        role=req.role,
+        organization=req.organization
+    )
+    db.add(user)
+    db.commit()
+    return {"status": "success", "data": {"id": str(user.id)}}
+```
+
+---
+
+## Step 8 — Run and Test the API
+
+Start the API server:
+```
+cd backend
+uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Open the auto-generated API docs:
+```
+http://localhost:8000/docs
+```
+
+Test the health endpoint:
+```
+curl http://localhost:8000/health
+```
+
+Expected: `{"status":"ok","service":"raphael-api"}`
+
+Test login with seeded admin account:
+```
+curl -X POST http://localhost:8000/api/v1/users/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"raphael_admin"}'
+```
+
+Expected: JSON response with a token field.
+
+---
+
+## Verification Checklist
+
+```
+uvicorn starts without import errors
+/health returns 200 with status ok
+/api/v1/system/status returns health of all services
+/api/v1/users/auth/login returns a JWT token for admin
+All routes from SYSTEM_ARCHITECTURE Section 6.2 exist (stubs acceptable)
+/docs shows all routes in Swagger UI
+No 500 errors on any GET endpoint
+```
