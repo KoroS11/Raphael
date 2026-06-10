@@ -143,3 +143,76 @@ class ErrorResponse(BaseModel):
     status: str = "error"
     data:   None = None
     meta:   Meta = Meta()
+    errors: List[dict] = []
+```
+
+---
+
+## Step 4 — Implement All Route Files
+
+Create a route file for each domain. Each must implement the endpoints defined in `docs/SYSTEM_ARCHITECTURE.md` Section 6.2.
+
+### backend/api/routes/layers.py
+
+```python
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
+from db.connection import get_db
+from db.queries import get_observations_in_bbox
+from api.auth import get_current_user
+from api.models.responses import APIResponse
+import json
+
+router = APIRouter()
+
+VALID_LAYERS = ["aq", "lst", "ndvi", "fire", "precipitation",
+                "urban", "risk", "stations", "boundaries"]
+
+@router.get("/{layer_type}/current")
+async def get_layer_current(
+    layer_type: str,
+    region_id:  str   = Query(...),
+    bbox:       str   = Query(...),   # "west,south,east,north"
+    db:         Session = Depends(get_db),
+    _user = Depends(get_current_user)
+):
+    if layer_type not in VALID_LAYERS:
+        return {"status": "error", "errors": [{"code": "INVALID_LAYER"}]}
+
+    west, south, east, north = map(float, bbox.split(","))
+    rows = get_observations_in_bbox(db, layer_type, region_id, (west, south, east, north))
+
+    features = [
+        {
+            "type": "Feature",
+            "geometry": row.geom,
+            "properties": {
+                "station_id":   row.station_id,
+                "station_name": row.station_name,
+                "value":        row.value,
+                "observed_at":  row.observed_at.isoformat(),
+                "is_anomalous": row.is_anomalous,
+                "anomaly_score": row.anomaly_score
+            }
+        }
+        for row in rows
+    ]
+
+    return {
+        "status": "success",
+        "data": {
+            "type": "FeatureCollection",
+            "features": features
+        },
+        "meta": {"layer_type": layer_type, "count": len(features)}
+    }
+
+@router.get("/{layer_type}/history")
+async def get_layer_history(
+    layer_type: str,
+    region_id:  str,
+    location:   str = Query(...),   # "lat,lon"
+    from_date:  str = Query(...),
+    to_date:    str = Query(...),
+    db: Session = Depends(get_db),
+    _user = Depends(get_current_user)

@@ -280,3 +280,144 @@ class IQAirFlow(BaseIngestionFlow):
     layer_type  = "aq"
 
 @task(name="fetch-iqair-nearest", retries=3)
+def fetch_iqair(lat: float, lon: float) -> dict:
+    if not API_KEY:
+        return {}
+    flow_obj = IQAirFlow()
+    return flow_obj.fetch(
+        f"{BASE_URL}/nearest_city",
+        params={"lat": lat, "lon": lon, "key": API_KEY}
+    )
+
+@task(name="write-iqair-to-db")
+def write_iqair(data: dict):
+    flow_obj = IQAirFlow()
+    d = data.get("data", {})
+    pollution = d.get("current", {}).get("pollution", {})
+    location  = d.get("location", {}).get("coordinates", [None, None])
+    if not pollution or not location[0]:
+        return
+    flow_obj.bulk_write([{
+        "id":           uuid.uuid4(),
+        "source_id":    flow_obj.source.id,
+        "region_id":    flow_obj.region.id,
+        "layer_type":   "aq",
+        "geometry":     flow_obj.normalize_point(location[1], location[0]),
+        "value":        float(pollution.get("aqius", 0)),
+        "unit":         "AQI (US)",
+        "station_name": d.get("city", ""),
+        "observed_at":  datetime.now(timezone.utc),
+        "raw_payload":  pollution
+    }])
+    flow_obj.update_source_sync_time()
+    flow_obj.close()
+
+@flow(name="iqair-ingestion")
+def iqair_flow():
+    # Query centroid of active region
+    lat, lon = 28.6139, 77.2090
+    data = fetch_iqair(lat, lon)
+    write_iqair(data)
+```
+
+---
+
+## Step 4 — Implement Weather Flows
+
+### Flow 4 — Open-Meteo (Primary Weather Source)
+
+Create `backend/ingestion/flows/weather_openmeteo.py`:
+
+```python
+from prefect import flow, task
+import uuid
+from datetime import datetime, timezone
+from ingestion.base import BaseIngestionFlow
+
+BASE_URL = "https://api.open-meteo.com/v1"
+
+VARIABLES = [
+    "temperature_2m", "precipitation", "wind_speed_10m",
+    "wind_direction_10m", "relative_humidity_2m",
+    "uv_index", "surface_pressure", "cloud_cover"
+]
+
+class OpenMeteoFlow(BaseIngestionFlow):
+    source_key = "open_meteo"
+    layer_type  = "weather"
+
+@task(name="fetch-open-meteo", retries=3)
+def fetch_weather(lat: float, lon: float) -> dict:
+    flow_obj = OpenMeteoFlow()
+    return flow_obj.fetch(
+        f"{BASE_URL}/forecast",
+        params={
+            "latitude":      lat,
+            "longitude":     lon,
+            "hourly":        ",".join(VARIABLES),
+            "forecast_days": 7,
+            "timezone":      "auto"
+        }
+    )
+
+@task(name="write-weather-to-db")
+def write_weather(data: dict, lat: float, lon: float):
+    flow_obj = OpenMeteoFlow()
+    hourly   = data.get("hourly", {})
+    times    = hourly.get("time", [])
+
+    observations = []
+    for i, t in enumerate(times[:24]):  # Store next 24h
+        for var in VARIABLES:
+            val = hourly.get(var, [])[i] if i < len(hourly.get(var, [])) else None
+            if val is None:
+                continue
+            observations.append({
+                "id":           uuid.uuid4(),
+                "source_id":    flow_obj.source.id,
+                "region_id":    flow_obj.region.id,
+                "layer_type":   "weather",
+                "geometry":     flow_obj.normalize_point(lat, lon),
+                "value":        float(val),
+                "unit":         _unit(var),
+                "station_id":   f"openmeteo_{var}",
+                "station_name": var,
+                "observed_at":  datetime.fromisoformat(t),
+                "raw_payload":  {"variable": var, "value": val}
+            })
+
+    flow_obj.bulk_write(observations)
+    flow_obj.update_source_sync_time()
+    flow_obj.close()
+    return len(observations)
+
+def _unit(var: str) -> str:
+    units = {
+        "temperature_2m": "celsius", "precipitation": "mm",
+        "wind_speed_10m": "km/h",    "wind_direction_10m": "degrees",
+        "relative_humidity_2m": "%", "uv_index": "index",
+        "surface_pressure": "hPa",   "cloud_cover": "%"
+    }
+    return units.get(var, "")
+
+@flow(name="openmeteo-ingestion")
+def openmeteo_flow():
+    lat, lon = 28.6139, 77.2090
+    data  = fetch_weather(lat, lon)
+    count = write_weather(data, lat, lon)
+    print(f"Wrote {count} weather observations")
+```
+
+---
+
+## Step 5 — Implement Fire Flows
+
+### Flow 5 — NASA FIRMS (Primary Fire Source)
+
+Create `backend/ingestion/flows/fire_firms.py`:
+
+```python
+from prefect import flow, task
+import os, uuid, csv, io
+from datetime import datetime, timezone
+from ingestion.base import BaseIngestionFlow
