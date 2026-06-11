@@ -248,3 +248,66 @@ def seed_demo():
             organization="Raphael"
         )
         db.add(admin)
+
+        # Create demo region (Delhi)
+        delhi_bbox = box(76.8, 28.4, 77.4, 28.9)
+        delhi = Region(
+            id=uuid.uuid4(),
+            name="Delhi NCT",
+            country_code="IND",
+            bbox=from_shape(delhi_bbox, srid=4326),
+            admin_level=2,
+            is_active=True
+        )
+        db.add(delhi)
+
+        db.commit()
+        print("Seed complete. Admin password: raphael_admin")
+        print("IMPORTANT: Change this password on first login.")
+    finally:
+        db.close()
+
+if __name__ == "__main__":
+    mode = sys.argv[1] if len(sys.argv) > 1 else "dev"
+    seed_demo()
+```
+
+Run the seed:
+```
+python scripts/seed.py --mode dev
+```
+
+---
+
+## Step 7 — Create Spatial Query Helpers
+
+Create `backend/db/queries.py` with the key spatial query functions used by the API and ML layers:
+
+```python
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from datetime import datetime, timedelta, timezone
+from .models import RawObservation, ZoneGeometry, MLOutput
+
+def get_observations_in_bbox(
+    db: Session,
+    layer_type: str,
+    region_id: str,
+    bbox: tuple,           # (west, south, east, north)
+    hours_back: int = 6
+) -> list:
+    west, south, east, north = bbox
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+
+    return db.execute(text("""
+        SELECT
+            id,
+            ST_AsGeoJSON(geometry)::json as geom,
+            value, unit, station_id, station_name,
+            observed_at, source_id, is_anomalous, anomaly_score
+        FROM raw_observations
+        WHERE layer_type = :layer_type
+          AND region_id  = :region_id
+          AND observed_at >= :cutoff
+          AND ST_Within(geometry,
+              ST_MakeEnvelope(:west, :south, :east, :north, 4326))

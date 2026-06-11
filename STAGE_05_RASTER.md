@@ -376,3 +376,97 @@ def fetch_ndvi_granules(bbox: tuple, target_date: date) -> list:
     password = os.getenv("EARTHDATA_PASSWORD", "")
     if not username:
         return []
+    west, south, east, north = bbox
+    r = httpx.get(
+        "https://cmr.earthdata.nasa.gov/search/granules.json",
+        params={
+            "short_name":   "MOD13A2",
+            "version":      "061",
+            "temporal":     f"{target_date},{target_date}",
+            "bounding_box": f"{west},{south},{east},{north}",
+            "page_size":    3
+        },
+        auth=(username, password),
+        timeout=30
+    )
+    return r.json().get("feed", {}).get("entry", [])
+
+@task(name="download-process-ndvi", retries=1)
+def process_ndvi(granule: dict, bbox: tuple) -> str:
+    import requests, tempfile
+    from processing.raster import process_modis_ndvi
+    username = os.getenv("EARTHDATA_USERNAME", "")
+    password = os.getenv("EARTHDATA_PASSWORD", "")
+    links    = granule.get("links", [])
+    hdf_link = next(
+        (l["href"] for l in links if l.get("href","").endswith(".hdf")), None
+    )
+    if not hdf_link:
+        return ""
+    tmp_dir  = Path(tempfile.mkdtemp())
+    hdf_path = tmp_dir / "ndvi_granule.hdf"
+    session  = requests.Session()
+    session.auth = (username, password)
+    r = session.get(hdf_link, stream=True, timeout=300)
+    r.raise_for_status()
+    with open(hdf_path, "wb") as f:
+        for chunk in r.iter_content(8192):
+            f.write(chunk)
+    tile = process_modis_ndvi(hdf_path, bbox, date.today())
+    hdf_path.unlink(missing_ok=True)
+    return str(tile) if tile else ""
+
+@task(name="write-ndvi-tile-metadata")
+def write_ndvi_metadata(tile_path: str, bbox: tuple):
+    if not tile_path:
+        return
+    from db.connection import SessionLocal
+    from db.models import RasterTile, Region
+    from geoalchemy2.shape import from_shape
+    from shapely.geometry import box as shapely_box
+    db = SessionLocal()
+    region = db.query(Region).filter(Region.is_active==True).first()
+    tile = RasterTile(
+        id=uuid.uuid4(),
+        layer_type="ndvi",
+        region_id=region.id,
+        tile_path=tile_path,
+        processed_at=datetime.now(timezone.utc),
+        valid_date=date.today(),
+        resolution_m=1000,
+        source="modis_ndvi",
+        colormap="YlGn"
+    )
+    db.add(tile)
+    db.commit()
+    db.close()
+
+@flow(name="modis-ndvi-ingestion")
+def ndvi_modis_flow():
+    bbox     = (76.8, 28.4, 77.4, 28.9)
+    granules = fetch_ndvi_granules(bbox, date.today())
+    if not granules:
+        print("No MODIS NDVI granules found")
+        return
+    tile_path = process_ndvi(granules[0], bbox)
+    write_ndvi_metadata(tile_path, bbox)
+    print(f"NDVI tile ready: {tile_path}")
+```
+
+---
+
+## Step 4 — Create Tile API Endpoint
+
+Add to `backend/api/routes/layers.py`:
+
+```python
+from fastapi.responses import FileResponse
+from db.models import RasterTile
+from pathlib import Path
+import os
+
+@router.get("/{layer_type}/tile")
+async def get_raster_tile(
+    layer_type: str,
+    region_id:  str = Query(...),
+    thumbnail:  bool = Query(False),
