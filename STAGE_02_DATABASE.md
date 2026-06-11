@@ -186,3 +186,65 @@ def downgrade():
 ---
 
 ## Step 5 — Run Migrations
+
+For SpatiaLite (low RAM):
+```
+cd backend
+python -c "
+from db.connection import engine
+from db.connection import load_spatialite
+from sqlalchemy import text
+with engine.connect() as conn:
+    conn.execute(text('SELECT InitSpatialMetaData()'))
+    conn.commit()
+"
+alembic upgrade head
+```
+
+For PostGIS (high RAM):
+
+First create the database:
+```
+psql -U postgres -p 5433 -c "CREATE USER raphael WITH PASSWORD 'raphael';"
+psql -U postgres -p 5433 -c "CREATE DATABASE raphael_db OWNER raphael;"
+psql -U postgres -p 5433 -d raphael_db -c "CREATE EXTENSION postgis;"
+```
+
+Then run migrations:
+```
+alembic upgrade head
+```
+
+---
+
+## Step 6 — Create the Seed Script
+
+Create `scripts/seed.py`:
+
+```python
+import sys
+import uuid
+from datetime import datetime, timezone
+sys.path.insert(0, "backend")
+
+from db.connection import SessionLocal
+from db.models import User, Source, Region
+from passlib.context import CryptContext
+from shapely.geometry import box
+from geoalchemy2.shape import from_shape
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def seed_demo():
+    db = SessionLocal()
+    try:
+        # Create admin user
+        admin = User(
+            id=uuid.uuid4(),
+            username="admin",
+            password_hash=pwd_context.hash("raphael_admin"),
+            display_name="Administrator",
+            role="admin",
+            organization="Raphael"
+        )
+        db.add(admin)

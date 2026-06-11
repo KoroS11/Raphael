@@ -281,3 +281,98 @@ def process_modis_ndvi(hdf_path: Path, bbox: Tuple, target_date: date) -> Option
 
     except Exception as e:
         print(f"MODIS NDVI processing failed: {e}")
+        return None
+
+
+def generate_thumbnail(tile_path: Path, width: int = 380, height: int = 160) -> Path:
+    """
+    Generate a small thumbnail version of a raster tile.
+    Used for the bottom panel LST and NDVI preview cards in the dashboard.
+    Matching the mockup: LST card shows 20C-50C color bar, NDVI shows 0.0-1.0 bar.
+    """
+    with rasterio.open(tile_path) as src:
+        from rasterio.enums import Resampling as RioResampling
+        data = src.read(
+            out_shape=(src.count, height, width),
+            resampling=RioResampling.bilinear
+        )
+
+    thumb_path = tile_path.parent / f"{tile_path.stem}_thumb.png"
+    with rasterio.open(
+        thumb_path, "w", driver="PNG",
+        height=height, width=width,
+        count=src.count, dtype="uint8"
+    ) as dst:
+        dst.write(data)
+
+    return thumb_path
+```
+
+---
+
+## Step 2 — Complete the MODIS LST Prefect Flow
+
+Update `backend/ingestion/flows/lst_modis.py` — replace the stub `process_lst_granule` task with the real implementation:
+
+```python
+@task(name="download-and-process-lst", retries=1)
+def process_lst_granule(granule: dict, bbox: tuple) -> str:
+    import httpx, tempfile
+    from processing.raster import process_modis_lst
+    from pathlib import Path
+    from datetime import date
+
+    username = os.getenv("EARTHDATA_USERNAME", "")
+    password = os.getenv("EARTHDATA_PASSWORD", "")
+
+    # Find the HDF4 download link in the granule metadata
+    links = granule.get("links", [])
+    hdf_link = next(
+        (l["href"] for l in links if l.get("href", "").endswith(".hdf")), None
+    )
+    if not hdf_link:
+        print("No HDF download link found in granule")
+        return ""
+
+    tmp_dir  = Path(tempfile.mkdtemp())
+    hdf_path = tmp_dir / "lst_granule.hdf"
+
+    # NASA Earthdata requires session-based auth
+    import requests
+    session = requests.Session()
+    session.auth = (username, password)
+    r = session.get(hdf_link, stream=True, timeout=300)
+    r.raise_for_status()
+    with open(hdf_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+    tile_path = process_modis_lst(hdf_path, bbox, date.today())
+    hdf_path.unlink(missing_ok=True)
+    return str(tile_path) if tile_path else ""
+```
+
+---
+
+## Step 3 — Create NDVI Prefect Flow
+
+Create `backend/ingestion/flows/ndvi_modis.py`:
+
+```python
+from prefect import flow, task
+import os, uuid
+from datetime import date, datetime, timezone
+from pathlib import Path
+from ingestion.base import BaseIngestionFlow
+
+class MODISNDVIFlow(BaseIngestionFlow):
+    source_key = "modis_ndvi"
+    layer_type  = "ndvi"
+
+@task(name="fetch-modis-ndvi-granules", retries=2)
+def fetch_ndvi_granules(bbox: tuple, target_date: date) -> list:
+    import httpx
+    username = os.getenv("EARTHDATA_USERNAME", "")
+    password = os.getenv("EARTHDATA_PASSWORD", "")
+    if not username:
+        return []
