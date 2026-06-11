@@ -311,3 +311,66 @@ def get_observations_in_bbox(
           AND observed_at >= :cutoff
           AND ST_Within(geometry,
               ST_MakeEnvelope(:west, :south, :east, :north, 4326))
+        ORDER BY observed_at DESC
+    """), {
+        "layer_type": layer_type,
+        "region_id":  region_id,
+        "cutoff":     cutoff,
+        "west": west, "south": south,
+        "east": east, "north": north
+    }).fetchall()
+
+
+def get_observations_for_zone(
+    db: Session,
+    zone_id: str,
+    layer_type: str,
+    lookback_days: int = 90
+) -> list:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    return db.execute(text("""
+        SELECT o.observed_at as ds, AVG(o.value) as y
+        FROM raw_observations o
+        JOIN zone_geometries z ON ST_Within(o.geometry, z.geometry)
+        WHERE z.id = :zone_id
+          AND o.layer_type = :layer_type
+          AND o.observed_at >= :cutoff
+        GROUP BY DATE_TRUNC('hour', o.observed_at)
+        ORDER BY ds ASC
+    """), {
+        "zone_id":    zone_id,
+        "layer_type": layer_type,
+        "cutoff":     cutoff
+    }).fetchall()
+
+
+def get_zone_current_indicators(db: Session, zone_id: str) -> dict:
+    result = db.execute(text("""
+        SELECT
+            o.layer_type,
+            AVG(o.value) as mean_value,
+            MAX(o.observed_at) as latest_at
+        FROM raw_observations o
+        JOIN zone_geometries z ON ST_Within(o.geometry, z.geometry)
+        WHERE z.id = :zone_id
+          AND o.observed_at >= NOW() - INTERVAL '6 hours'
+        GROUP BY o.layer_type
+    """), {"zone_id": zone_id}).fetchall()
+    return {row.layer_type: {"value": row.mean_value, "at": row.latest_at}
+            for row in result}
+```
+
+---
+
+## Verification Checklist
+
+```
+alembic upgrade head completes with no errors
+All tables exist in the database
+Spatial indexes exist (check with \d raw_observations in psql or .schema in sqlite3)
+Seed script runs without errors
+Admin user exists in users table
+Delhi region exists in regions table
+All 26 source rows exist in sources table
+get_observations_in_bbox returns empty list (no data yet, but no error)
+```

@@ -470,3 +470,98 @@ async def get_raster_tile(
     layer_type: str,
     region_id:  str = Query(...),
     thumbnail:  bool = Query(False),
+    db: Session = Depends(get_db),
+    _user = Depends(get_current_user)
+):
+    """
+    Returns the most recent raster tile PNG for a layer.
+    Used by frontend BitmapLayer (full tile) and dashboard thumbnail cards.
+    """
+    tile = (
+        db.query(RasterTile)
+        .filter(
+            RasterTile.layer_type == layer_type,
+            RasterTile.region_id  == region_id
+        )
+        .order_by(RasterTile.processed_at.desc())
+        .first()
+    )
+    if not tile:
+        return {"status": "error", "errors": [{"code": "NO_TILE_AVAILABLE"}]}
+
+    path = Path(tile.tile_path)
+    if thumbnail:
+        from processing.raster import generate_thumbnail
+        path = generate_thumbnail(path)
+
+    return FileResponse(
+        str(path),
+        media_type="image/png",
+        headers={
+            "X-Tile-Date":   str(tile.valid_date),
+            "X-Resolution-M": str(tile.resolution_m),
+            "X-Source":      tile.source or ""
+        }
+    )
+```
+
+---
+
+## Step 5 — Add Tile Bounds to API Response
+
+The frontend deck.gl BitmapLayer needs the geographic bounds of the tile to render it correctly on the map. Add a bounds endpoint:
+
+```python
+@router.get("/{layer_type}/tile-bounds")
+async def get_tile_bounds(
+    layer_type: str,
+    region_id:  str = Query(...),
+    db: Session = Depends(get_db),
+    _user = Depends(get_current_user)
+):
+    from sqlalchemy import text
+    result = db.execute(text("""
+        SELECT
+            ST_XMin(bounds) as west,
+            ST_YMin(bounds) as south,
+            ST_XMax(bounds) as east,
+            ST_YMax(bounds) as north,
+            valid_date,
+            resolution_m,
+            source
+        FROM raster_tiles
+        WHERE layer_type  = :layer_type
+          AND region_id   = :region_id
+        ORDER BY processed_at DESC
+        LIMIT 1
+    """), {"layer_type": layer_type, "region_id": region_id}).fetchone()
+
+    if not result:
+        return {"status": "error", "errors": [{"code": "NO_BOUNDS"}]}
+
+    return {
+        "status": "success",
+        "data": {
+            "bounds":       [result.west, result.south, result.east, result.north],
+            "valid_date":   str(result.valid_date),
+            "resolution_m": result.resolution_m,
+            "source":       result.source
+        }
+    }
+```
+
+---
+
+## Verification Checklist
+
+```
+process_modis_lst runs without import errors
+process_sentinel2_ndvi runs without import errors
+generate_thumbnail produces a smaller PNG correctly
+lst_modis_flow runs (even if it returns no granules — acceptable)
+ndvi_modis_flow runs (even if no granules — acceptable)
+GET /api/v1/layers/lst/tile returns 200 or the no-tile error (not a 500)
+GET /api/v1/layers/ndvi/tile returns 200 or the no-tile error
+GET /api/v1/layers/lst/tile-bounds returns bounds when a tile exists
+PNG tiles written to data/tiles/ directory are valid image files
+```
