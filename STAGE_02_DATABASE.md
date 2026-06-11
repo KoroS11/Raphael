@@ -123,3 +123,66 @@ Key models to implement: User, ActivityLog, Region, Source, RawObservation, Zone
 Every geometry column must use GeoAlchemy2's `Geometry` type:
 
 ```python
+from geoalchemy2 import Geometry
+from sqlalchemy import Column, String, Float, Boolean, DateTime, Integer, Text, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import declarative_base
+import uuid
+
+Base = declarative_base()
+
+class RawObservation(Base):
+    __tablename__ = "raw_observations"
+    id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_id    = Column(UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False)
+    region_id    = Column(UUID(as_uuid=True), ForeignKey("regions.id"), nullable=False)
+    layer_type   = Column(String(50), nullable=False)
+    geometry     = Column(Geometry("POINT", srid=4326), nullable=False)
+    value        = Column(Float, nullable=False)
+    unit         = Column(String(20))
+    station_id   = Column(String(100))
+    station_name = Column(String(200))
+    observed_at  = Column(DateTime(timezone=True), nullable=False)
+    synced_at    = Column(DateTime(timezone=True))
+    raw_payload  = Column(JSONB)
+    is_anomalous = Column(Boolean, default=False)
+    anomaly_score= Column(Float)
+```
+
+Define all remaining models following the same pattern.
+
+---
+
+## Step 4 — Create the Migration Script
+
+Create `backend/db/migrations/versions/001_initial_schema.py`:
+
+Copy the full SQL from `docs/TECHNICAL_SPECIFICATION.md` Section 4 and wrap it as an Alembic migration:
+
+```python
+def upgrade():
+    op.execute("""
+        -- Full SQL from TECHNICAL_SPECIFICATION.md Section 4 goes here
+        -- All CREATE TABLE, CREATE INDEX, and INSERT statements
+    """)
+
+def downgrade():
+    op.execute("""
+        DROP TABLE IF EXISTS activity_log CASCADE;
+        DROP TABLE IF EXISTS event_markers CASCADE;
+        DROP TABLE IF EXISTS import_datasets CASCADE;
+        DROP TABLE IF EXISTS alert_events CASCADE;
+        DROP TABLE IF EXISTS alert_rules CASCADE;
+        DROP TABLE IF EXISTS ml_outputs CASCADE;
+        DROP TABLE IF EXISTS raster_tiles CASCADE;
+        DROP TABLE IF EXISTS raw_observations CASCADE;
+        DROP TABLE IF EXISTS zone_geometries CASCADE;
+        DROP TABLE IF EXISTS regions CASCADE;
+        DROP TABLE IF EXISTS sources CASCADE;
+        DROP TABLE IF EXISTS users CASCADE;
+    """)
+```
+
+---
+
+## Step 5 — Run Migrations

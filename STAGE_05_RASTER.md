@@ -187,3 +187,97 @@ def process_modis_lst(hdf_path: Path, bbox: Tuple, target_date: date) -> Optiona
         return out_path
 
     except Exception as e:
+        print(f"LST processing failed: {e}")
+        return None
+
+
+def process_sentinel2_ndvi(tif_path: Path, bbox: Tuple, target_date: date) -> Optional[Path]:
+    """
+    Process a Sentinel-2 GeoTIFF (containing B04 and B08 bands) into NDVI PNG.
+    NDVI = (B08 - B04) / (B08 + B04)
+    Color scale: brown (dead) -> white (bare) -> light green -> dark green (dense)
+    """
+    try:
+        wgs_tif     = tif_path.parent / f"ndvi_wgs84_{target_date}.tif"
+        clipped_tif = tif_path.parent / f"ndvi_clipped_{target_date}.tif"
+
+        reproject_to_wgs84(tif_path, wgs_tif)
+        clip_to_bbox(wgs_tif, bbox, clipped_tif)
+
+        with rasterio.open(clipped_tif) as src:
+            # Band 1 = B04 (Red), Band 2 = B08 (NIR) per Sentinel-2 convention
+            b04       = src.read(1).astype(float)
+            b08       = src.read(2).astype(float)
+            transform = src.transform
+            crs       = src.crs
+
+        # Compute NDVI
+        denominator = b08 + b04
+        denominator[denominator == 0] = np.nan
+        ndvi = (b08 - b04) / denominator
+        ndvi = np.clip(ndvi, -1, 1)
+
+        # NDVI colormap matching the mockup (neon green gradient)
+        ndvi_colors = [
+            (0.0,  "#3d1a00"),  # -1.0 — deep brown (water/bare)
+            (0.25, "#8b6914"),  # -0.25 — brown
+            (0.4,  "#ffffcc"),  # 0.0  — pale (bare soil)
+            (0.55, "#78c679"),  # 0.2  — light green (sparse)
+            (0.7,  "#31a354"),  # 0.4  — medium green
+            (0.85, "#006837"),  # 0.6  — dense green
+            (1.0,  "#00ff88"),  # 0.8+ — neon green (very dense, matches mockup glow)
+        ]
+        cmap = mcolors.LinearSegmentedColormap.from_list("ndvi_raphael", ndvi_colors)
+
+        out_path = TILES_DIR / f"ndvi_{target_date}.png"
+        apply_colormap(ndvi, -0.2, 0.8, "YlGn", out_path, transform, crs)
+
+        # Cleanup
+        for tmp in [wgs_tif, clipped_tif]:
+            tmp.unlink(missing_ok=True)
+
+        print(f"NDVI tile written: {out_path}")
+        return out_path
+
+    except Exception as e:
+        print(f"NDVI processing failed: {e}")
+        return None
+
+
+def process_modis_ndvi(hdf_path: Path, bbox: Tuple, target_date: date) -> Optional[Path]:
+    """
+    Process MODIS MOD13A2 HDF4 file for NDVI.
+    Fallback when Sentinel-2 is not available.
+    """
+    try:
+        import subprocess
+        subdataset = f'HDF4_EOS:EOS_GRID:"{hdf_path}":MOD_Grid_16DAY_1km_VI:1 km 16 days NDVI'
+        raw_tif    = hdf_path.parent / f"ndvi_raw_{target_date}.tif"
+        subprocess.run(
+            ["gdal_translate", "-of", "GTiff", subdataset, str(raw_tif)],
+            check=True, capture_output=True
+        )
+        wgs_tif     = hdf_path.parent / f"ndvi_wgs84_{target_date}.tif"
+        clipped_tif = hdf_path.parent / f"ndvi_clipped_{target_date}.tif"
+        reproject_to_wgs84(raw_tif, wgs_tif)
+        clip_to_bbox(wgs_tif, bbox, clipped_tif)
+
+        with rasterio.open(clipped_tif) as src:
+            data      = src.read(1).astype(float)
+            transform = src.transform
+            crs       = src.crs
+
+        # MODIS NDVI scale factor: 0.0001
+        data[data == -3000] = np.nan  # fill value
+        ndvi = data * 0.0001
+
+        out_path = TILES_DIR / f"ndvi_modis_{target_date}.png"
+        apply_colormap(ndvi, -0.2, 0.8, "YlGn", out_path, transform, crs)
+
+        for tmp in [raw_tif, wgs_tif, clipped_tif]:
+            tmp.unlink(missing_ok=True)
+
+        return out_path
+
+    except Exception as e:
+        print(f"MODIS NDVI processing failed: {e}")
