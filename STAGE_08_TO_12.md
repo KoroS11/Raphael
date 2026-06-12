@@ -567,3 +567,193 @@ export function BottomPanelRow() {
         <EChartsReact option={precipOption} style={{ height: "100%", width: "100%" }} theme="dark" />
       </BottomPanel>
 
+      {/* Panel 5: Wind and Weather — matches mockup with compass */}
+      <BottomPanel title="Wind and Weather" className="min-w-[180px]">
+        <div className="flex items-center gap-4">
+          <WindCompass direction={225} speed={12} />
+          <div className="space-y-2">
+            <div>
+              <div className="text-xs text-gray-500">Humidity</div>
+              <div className="text-sm font-bold text-white">54%</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">UV Index</div>
+              <div className="text-sm font-bold text-yellow-400">6 <span className="text-xs font-normal">High</span></div>
+            </div>
+          </div>
+        </div>
+      </BottomPanel>
+    </div>
+  );
+}
+
+function BottomPanel({ title, children, className = "" }: {
+  title: string; children: React.ReactNode; className?: string
+}) {
+  return (
+    <div className={`flex-1 bg-[#080c14]/90 border border-white/5 rounded-xl p-3 flex flex-col gap-2 backdrop-blur-sm ${className}`}>
+      <div className="text-xs font-semibold text-gray-400 flex-shrink-0">{title}</div>
+      <div className="flex-1 min-h-0">{children}</div>
+    </div>
+  );
+}
+
+function WindCompass({ direction, speed }: { direction: number; speed: number }) {
+  const rad = (direction * Math.PI) / 180;
+  const cx = 40, cy = 40, r = 30;
+  const nx = cx + r * Math.sin(rad);
+  const ny = cy - r * Math.cos(rad);
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <svg width={80} height={80} className="text-white">
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#ffffff15" strokeWidth={1.5} />
+        {["N","E","S","W"].map((dir, i) => {
+          const angle = i * 90;
+          const x = cx + (r+8) * Math.sin(angle * Math.PI/180);
+          const y = cy - (r+8) * Math.cos(angle * Math.PI/180);
+          return <text key={dir} x={x} y={y+4} textAnchor="middle" fill={dir==="N"?"#60a5fa":"#6b7280"} fontSize={9}>{dir}</text>;
+        })}
+        <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="#60a5fa" strokeWidth={2} strokeLinecap="round" />
+        <circle cx={cx} cy={cy} r={3} fill="#60a5fa" />
+      </svg>
+      <div className="text-center">
+        <div className="text-sm font-bold text-white">{speed} km/h</div>
+        <div className="text-xs text-gray-500">SW</div>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## Step 6 — Assemble the Explorer View
+
+Create `src/views/ExplorerView/index.tsx`:
+
+```typescript
+import { useState } from "react";
+import { AnimatePresence } from "framer-motion";
+import { MapCanvas }      from "../../components/map/MapCanvas";
+import { LayersPanel }    from "../../components/map/LayersPanel";
+import { CityInfoPanel }  from "../../components/panels/CityInfoPanel";
+import { BottomPanelRow } from "../../components/panels/BottomPanelRow";
+import { Layers } from "lucide-react";
+
+export function ExplorerView() {
+  const [showLayers, setShowLayers] = useState(true);
+
+  return (
+    <div className="flex h-full w-full overflow-hidden">
+      {/* Map area */}
+      <div className="flex-1 relative flex flex-col min-w-0">
+        {/* Map canvas — takes all remaining space above bottom panels */}
+        <div className="flex-1 relative overflow-hidden">
+          {/* Layers panel — floats over map left side */}
+          <AnimatePresence>
+            {showLayers && (
+              <LayersPanel onClose={() => setShowLayers(false)} />
+            )}
+          </AnimatePresence>
+
+          {/* Toggle layers button */}
+          {!showLayers && (
+            <button
+              onClick={() => setShowLayers(true)}
+              className="absolute top-3 left-3 z-10 p-2 bg-[#080c14]/90 border border-white/10 rounded-lg text-gray-400 hover:text-white transition-colors backdrop-blur-sm"
+            >
+              <Layers size={16} />
+            </button>
+          )}
+
+          <MapCanvas />
+        </div>
+
+        {/* Bottom panel row */}
+        <BottomPanelRow />
+      </div>
+
+      {/* Right info panel */}
+      <CityInfoPanel />
+    </div>
+  );
+}
+```
+
+---
+
+## Verification Checklist
+
+```
+Shell renders with sidebar, top bar, and main content area
+Sidebar nav items navigate to correct routes
+Top bar time slider drags smoothly from -7D to +30D
+MapCanvas fills the center area
+LayersPanel appears over the map left side with all 9 layers listed
+CityInfoPanel shows on the right with AQI/LST/NDVI/Risk metric cards
+Risk Score gradient bar renders with marker at correct position
+Recent Alerts list shows last 3 alerts
+AQI Trend chart renders as a purple line chart
+Bottom row shows 6 panels: stations, LST thumbnail, NDVI thumbnail, precipitation, wind, AI insights
+LST thumbnail shows colored minimap from raster tile
+NDVI thumbnail shows green colored minimap
+Wind compass SVG rotates to correct direction
+All data fetched from FastAPI (not hardcoded)
+No console errors in the browser devtools
+```
+
+---
+
+# Stage 09 — Custom Data Import (Mage.ai)
+
+## Prerequisites
+Stage 08 completed. Full dashboard rendering.
+
+## Objective
+Set up Mage.ai as the visual import pipeline for field data. The Data Catalog view embeds Mage.ai as an iframe.
+
+## Step 1 — Initialize Mage.ai Project
+
+```
+pip install mage-ai
+mage init raphael_mage
+cd raphael_mage
+```
+
+## Step 2 — Create Import Pipelines
+
+Create one pipeline per import format. Each pipeline has 5 blocks.
+
+For each pipeline file in `mage/pipelines/`:
+
+**CSV pipeline** (`mage/pipelines/csv_import/`):
+- Block 1 `load_csv.py`: `import pandas as pd; df = pd.read_csv(filepath); return df`
+- Block 2 `map_columns.py`: Apply user-defined column mapping from config
+- Block 3 `validate.py`: Check lat/lon ranges, timestamp format, value bounds
+- Block 4 `normalize.py`: Reproject coordinates, convert units
+- Block 5 `export_db.py`: Bulk insert to raw_observations via SQLAlchemy
+
+Repeat for GeoJSON, KML, Shapefile, Excel formats.
+
+## Step 3 — Start Mage.ai
+
+```
+mage start raphael_mage --host 127.0.0.1 --port 6789
+```
+
+## Step 4 — Embed in Data Catalog View
+
+Create `src/views/DataCatalogView/index.tsx`:
+
+```typescript
+export function DataCatalogView() {
+  return (
+    <div className="flex h-full">
+      <iframe
+        src="http://localhost:6789"
+        className="flex-1 border-0"
+        title="Raphael Data Import — Mage.ai"
+      />
+    </div>
+  );
