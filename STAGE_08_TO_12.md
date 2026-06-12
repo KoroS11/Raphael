@@ -757,3 +757,193 @@ export function DataCatalogView() {
       />
     </div>
   );
+}
+```
+
+---
+
+# Stage 10 — Alert System
+
+## Prerequisites
+Stage 08 completed.
+
+## Objective
+Build the full alert engine. Alerts evaluate continuously, trigger system tray notifications via Tauri, and display in the Alerts view.
+
+## Step 1 — Create Alert Evaluator
+
+Create `backend/api/alerts/evaluator.py`:
+
+```python
+import asyncio
+from sqlalchemy import text
+from db.connection import SessionLocal
+import httpx
+
+async def run_alert_evaluator():
+    while True:
+        await asyncio.sleep(300)  # Check every 5 minutes
+        db = SessionLocal()
+        try:
+            rules = db.execute(text("""
+                SELECT r.*, z.geometry as zone_geom
+                FROM alert_rules r
+                LEFT JOIN zone_geometries z ON z.id = r.zone_id
+                WHERE r.is_active = true
+            """)).fetchall()
+
+            for rule in rules:
+                current_val = db.execute(text("""
+                    SELECT AVG(value) FROM raw_observations
+                    WHERE layer_type = :layer
+                      AND observed_at >= NOW() - INTERVAL '1 hour'
+                      AND ST_Within(geometry, :geom)
+                """), {"layer": rule.layer_type, "geom": rule.zone_geom}).scalar()
+
+                if current_val is None:
+                    continue
+
+                triggered = False
+                if rule.operator == "gt"  and current_val >  rule.threshold: triggered = True
+                if rule.operator == "lt"  and current_val <  rule.threshold: triggered = True
+
+                if triggered:
+                    db.execute(text("""
+                        INSERT INTO alert_events (id, rule_id, observed_value)
+                        VALUES (gen_random_uuid(), :rule_id, :val)
+                    """), {"rule_id": rule.id, "val": float(current_val)})
+                    db.commit()
+                    # Notify frontend via SSE endpoint
+                    await notify_frontend(rule.name, current_val, rule.severity)
+        finally:
+            db.close()
+
+async def notify_frontend(rule_name: str, value: float, severity: str):
+    # POST to Tauri notification endpoint
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post("http://localhost:8000/api/v1/alerts/notify", json={
+                "title": f"Raphael Alert: {rule_name}",
+                "body":  f"Current value: {value:.1f}",
+                "severity": severity
+            })
+    except Exception:
+        pass
+```
+
+## Step 2 — Add SSE Notification Stream
+
+Add to `backend/api/routes/alerts.py`:
+
+```python
+from fastapi.responses import StreamingResponse
+import asyncio, json
+
+alert_subscribers: list = []
+
+@router.get("/stream")
+async def alert_stream(_user = Depends(get_current_user)):
+    async def event_generator():
+        queue = asyncio.Queue()
+        alert_subscribers.append(queue)
+        try:
+            while True:
+                data = await queue.get()
+                yield f"data: {json.dumps(data)}\n\n"
+        finally:
+            alert_subscribers.remove(queue)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+```
+
+## Step 3 — Build Alerts View
+
+Create `src/views/AlertsView/index.tsx` with:
+- Alert rule builder form: zone selector, layer dropdown, operator select, threshold input, severity picker
+- Active rules list with enable/disable toggles
+- Alert history table with filter by date/severity/layer
+- CSV export button
+
+---
+
+# Stage 11 — Report Generation (WeasyPrint + Playwright)
+
+## Prerequisites
+Stage 08 completed.
+
+## Objective
+Build the PDF report generation pipeline.
+
+## Step 1 — Create Jinja2 Report Template
+
+Create `backend/reports/templates/zone_report.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; margin: 0; background: #fff; color: #111; }
+    .header { background: linear-gradient(135deg, #0a0f1a, #0d2451); color: white; padding: 40px; }
+    .logo { font-size: 24px; font-weight: 700; letter-spacing: 2px; }
+    .subtitle { font-size: 12px; opacity: 0.6; margin-top: 4px; }
+    .zone-name { font-size: 36px; font-weight: 700; margin-top: 20px; }
+    .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; padding: 24px; }
+    .metric-card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; }
+    .metric-label { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric-value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+    .section { padding: 24px; border-top: 1px solid #f3f4f6; }
+    .section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+    .map-image { width: 100%; border-radius: 12px; overflow: hidden; }
+    .data-source { font-size: 10px; color: #9ca3af; margin-top: 4px; }
+    .footer { padding: 24px; border-top: 1px solid #f3f4f6; font-size: 11px; color: #9ca3af; display: flex; justify-content: space-between; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">RAPHAEL</div>
+    <div class="subtitle">Environmental Intelligence Platform</div>
+    <div class="zone-name">{{ zone_name }}</div>
+    <div style="opacity:0.6; margin-top:4px; font-size:13px">{{ region_name }} &bull; Generated {{ generated_at }}</div>
+  </div>
+
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-label">Air Quality (AQI)</div>
+      <div class="metric-value" style="color:#a855f7">{{ indicators.aq.current | round(0) }}</div>
+      <div style="font-size:12px; color:#6b7280">{{ indicators.aq.category }}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Land Surface Temp</div>
+      <div class="metric-value" style="color:#ef4444">{{ indicators.lst.current | round(1) }}°C</div>
+      <div style="font-size:12px; color:#6b7280">{{ indicators.lst.category }}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">NDVI Green Cover</div>
+      <div class="metric-value" style="color:#22c55e">{{ indicators.ndvi.current | round(2) }}</div>
+      <div style="font-size:12px; color:#6b7280">{{ indicators.ndvi.category }}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">AI Risk Score</div>
+      <div class="metric-value" style="color:#f97316">{{ risk_score.value }}/100</div>
+      <div style="font-size:12px; color:#6b7280">{{ risk_score.category }}</div>
+    </div>
+  </div>
+
+  {% if map_image_b64 %}
+  <div class="section">
+    <div class="section-title">Environmental Map — {{ generated_at_date }}</div>
+    <img class="map-image" src="data:image/png;base64,{{ map_image_b64 }}" />
+  </div>
+  {% endif %}
+
+  <div class="section">
+    <div class="section-title">AI Assessment</div>
+    <p style="color:#374151; line-height:1.6">{{ risk_score.explanation }}</p>
+  </div>
+
+  <div class="footer">
+    <div>Raphael Environmental Intelligence Platform &bull; {{ organization }}</div>
+    <div>Data sources: {{ data_sources | join(', ') }}</div>
+  </div>
