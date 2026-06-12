@@ -377,3 +377,193 @@ export function CityInfoPanel() {
             <div className="text-xs text-gray-600 mt-0.5">
               {s?.indicators?.[card.key]?.category ?? (card.key === "risk" ? s?.risk_score?.category : "")}
             </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Risk Score bar — matches mockup gradient bar */}
+      <div className="px-3 pb-3 border-b border-white/5">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-gray-400">Risk Score (AI)</span>
+          <div className="flex items-center gap-1">
+            <span className="text-lg font-bold text-orange-400">{s?.risk_score?.value ?? "—"}</span>
+            <span className="text-xs text-gray-500">/100</span>
+          </div>
+        </div>
+        <div className="h-2 rounded-full overflow-hidden bg-white/5">
+          <div className="h-full bg-gradient-to-r from-green-500 via-yellow-400 via-orange-400 to-red-500 rounded-full relative">
+            <div
+              className="absolute top-0 h-full w-1 bg-white rounded-full"
+              style={{ left: `${s?.risk_score?.value ?? 0}%`, transform: "translateX(-50%)" }}
+            />
+          </div>
+        </div>
+        <div className="text-xs text-gray-500 mt-1.5 font-medium">
+          {s?.risk_score?.category ?? "High Risk"}
+        </div>
+        <div className="text-xs text-gray-600 mt-0.5">{s?.risk_score?.explanation}</div>
+      </div>
+
+      {/* Recent Alerts — matches mockup */}
+      <div className="px-3 py-3 border-b border-white/5">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-gray-400">Recent Alerts</span>
+          <button className="text-xs text-blue-400 hover:text-blue-300">See all</button>
+        </div>
+        <div className="space-y-2">
+          {(s?.recent_alerts ?? []).slice(0,3).map((alert:any) => (
+            <div key={alert.id} className="flex items-center gap-2">
+              <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", {
+                "bg-red-400":    alert.severity === "critical",
+                "bg-orange-400": alert.severity === "warning",
+                "bg-blue-400":   alert.severity === "info"
+              })} />
+              <span className="text-xs text-gray-300 flex-1 truncate">{alert.rule_name}</span>
+              <span className="text-xs text-gray-600 flex-shrink-0">
+                {Math.round((Date.now() - new Date(alert.triggered_at).getTime()) / 3600000)}h ago
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* AQI Trend chart — matches purple line chart in mockup */}
+      <div className="px-3 py-3 border-b border-white/5">
+        <div className="text-xs font-semibold text-gray-400 mb-2">AQI Trend (7 Days)</div>
+        <EChartsReact option={aqi7DayOption} style={{ height: 100 }} theme="dark" />
+      </div>
+
+      {/* AI Insights — matches bottom-right panel in mockup */}
+      <div className="px-3 py-3">
+        <div className="text-xs font-semibold text-gray-400 mb-2">AI Insights</div>
+        <div className="space-y-2">
+          {(insights?.data ?? []).map((insight:any, i:number) => (
+            <div key={i} className="flex items-start gap-2">
+              <span className={cn("mt-0.5 flex-shrink-0", {
+                "text-red-400":    insight.icon === "heat",
+                "text-blue-400":   insight.icon === "cloud",
+                "text-green-400":  insight.icon === "leaf"
+              })}>
+                {insight.icon === "heat" ? "🌡" : insight.icon === "cloud" ? "💨" : "🌿"}
+              </span>
+              <span className="text-xs text-gray-300 leading-relaxed">{insight.message}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## Step 5 — Build the Bottom Data Panels
+
+Matches the six bottom panels in the mockup: Live AQI Stations, LST thumbnail, NDVI thumbnail, Precipitation Forecast, Wind and Weather, AI Insights.
+
+Create `src/components/panels/BottomPanelRow.tsx`:
+
+```typescript
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../../api/client";
+import { useDataStore } from "../../store/dataStore";
+import EChartsReact from "echarts-for-react";
+
+export function BottomPanelRow() {
+  const { activeRegion } = useDataStore();
+
+  const { data: stationsData } = useQuery({
+    queryKey: ["stations", activeRegion],
+    queryFn:  () => api.getLayer("aq", activeRegion, "76.8,28.4,77.4,28.9")
+  });
+
+  const { data: weatherData } = useQuery({
+    queryKey: ["weather", activeRegion],
+    queryFn:  () => api.getLayer("weather", activeRegion, "76.8,28.4,77.4,28.9")
+  });
+
+  const lstTileUrl  = `http://localhost:8000/api/v1/layers/lst/tile?region_id=${activeRegion}&thumbnail=true`;
+  const ndviTileUrl = `http://localhost:8000/api/v1/layers/ndvi/tile?region_id=${activeRegion}&thumbnail=true`;
+
+  const top5Stations = (stationsData?.data?.features ?? [])
+    .sort((a:any, b:any) => b.properties.value - a.properties.value)
+    .slice(0, 5);
+
+  const precipOption = {
+    backgroundColor: "transparent",
+    grid: { top: 10, right: 5, bottom: 25, left: 35 },
+    xAxis: {
+      type: "category",
+      data: ["Today", "May 19", "May 20", "May 21", "May 22"],
+      axisLabel: { color: "#6b7280", fontSize: 9 },
+      axisLine: { show: false }, axisTick: { show: false }
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: "#6b7280", fontSize: 9, formatter: "{value}mm" },
+      splitLine: { lineStyle: { color: "#ffffff08" } }
+    },
+    series: [{
+      type: "bar",
+      data: [2.1, 12.4, 24.8, 5.6, 0.3],
+      itemStyle: { color: "#3b82f6", borderRadius: [3,3,0,0] },
+      label: { show: true, position: "top", color: "#9ca3af", fontSize: 9,
+               formatter: (p:any) => p.value > 0 ? p.value : "" }
+    }]
+  };
+
+  return (
+    <div className="h-[220px] flex gap-2 px-2 pb-2 flex-shrink-0 overflow-x-auto">
+      {/* Panel 1: Live AQI Stations */}
+      <BottomPanel title="Live AQI Stations (Top 5)" className="min-w-[220px]">
+        <div className="space-y-1.5">
+          {top5Stations.map((f:any) => {
+            const val = f.properties.value;
+            const cat = val > 200 ? "Very Poor" : val > 150 ? "Poor" : val > 100 ? "Moderate" : "Good";
+            const col = val > 200 ? "#a855f7" : val > 150 ? "#ef4444" : val > 100 ? "#f97316" : "#22c55e";
+            return (
+              <div key={f.properties.station_id} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full" style={{ background: col }} />
+                  <span className="text-xs text-gray-300 truncate max-w-[120px]">{f.properties.station_name}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold" style={{ color: col }}>{Math.round(val)}</span>
+                  <span className="text-xs text-gray-600">{cat}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </BottomPanel>
+
+      {/* Panel 2: LST thumbnail — matches mockup red-orange mini map */}
+      <BottomPanel title="Land Surface Temperature" className="min-w-[180px]">
+        <div className="flex-1 relative rounded overflow-hidden">
+          <img src={lstTileUrl} alt="LST" className="w-full h-full object-cover" />
+          <div className="absolute bottom-0 left-0 right-0 h-4 flex items-center justify-between px-2">
+            <span className="text-[9px] text-blue-200">20°C</span>
+            <div className="flex-1 mx-2 h-1.5 rounded-full bg-gradient-to-r from-blue-500 via-yellow-400 to-red-600" />
+            <span className="text-[9px] text-red-200">50°C</span>
+          </div>
+        </div>
+      </BottomPanel>
+
+      {/* Panel 3: NDVI thumbnail — matches mockup green mini map */}
+      <BottomPanel title="NDVI (Green Cover)" className="min-w-[180px]">
+        <div className="flex-1 relative rounded overflow-hidden">
+          <img src={ndviTileUrl} alt="NDVI" className="w-full h-full object-cover" />
+          <div className="absolute bottom-0 left-0 right-0 h-4 flex items-center justify-between px-2">
+            <span className="text-[9px] text-gray-400">0.0</span>
+            <div className="flex-1 mx-2 h-1.5 rounded-full bg-gradient-to-r from-yellow-800 via-yellow-300 to-green-600" />
+            <span className="text-[9px] text-green-300">1.0</span>
+          </div>
+        </div>
+      </BottomPanel>
+
+      {/* Panel 4: Precipitation forecast */}
+      <BottomPanel title="Precipitation Forecast" className="min-w-[220px]">
+        <EChartsReact option={precipOption} style={{ height: "100%", width: "100%" }} theme="dark" />
+      </BottomPanel>
+
