@@ -947,3 +947,193 @@ Create `backend/reports/templates/zone_report.html`:
     <div>Raphael Environmental Intelligence Platform &bull; {{ organization }}</div>
     <div>Data sources: {{ data_sources | join(', ') }}</div>
   </div>
+</body>
+</html>
+```
+
+## Step 2 — Create Report Generator
+
+Create `backend/reports/generator.py`:
+
+```python
+import base64, uuid, asyncio
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML
+from playwright.async_api import async_playwright
+from datetime import datetime
+import os
+
+REPORTS_DIR  = Path(os.getenv("RAPHAEL_DATA_DIR", "./data")) / "reports"
+TEMPLATE_DIR = Path(__file__).parent / "templates"
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)))
+
+async def capture_map_screenshot(region_id: str) -> str:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page    = await browser.new_page(viewport={"width": 1200, "height": 600})
+        await page.goto(f"http://localhost:5173/explorer?region={region_id}&screenshot=1")
+        await page.wait_for_timeout(3000)  # Wait for map tiles to load
+        screenshot = await page.screenshot(type="png")
+        await browser.close()
+    return base64.b64encode(screenshot).decode()
+
+async def generate_zone_report(zone_id: str, scorecard: dict, organization: str) -> Path:
+    map_b64 = await capture_map_screenshot(scorecard.get("zone", {}).get("region_id", ""))
+
+    template = env.get_template("zone_report.html")
+    html_str = template.render(
+        zone_name=scorecard["zone"]["name"],
+        region_name=scorecard["zone"].get("region", ""),
+        generated_at=datetime.now().strftime("%B %d, %Y at %H:%M"),
+        generated_at_date=datetime.now().strftime("%B %d, %Y"),
+        organization=organization,
+        indicators=scorecard["indicators"],
+        risk_score=scorecard["risk_score"],
+        data_sources=scorecard.get("data_sources", []),
+        map_image_b64=map_b64
+    )
+
+    out_path = REPORTS_DIR / f"zone_report_{zone_id[:8]}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+    HTML(string=html_str, base_url=str(TEMPLATE_DIR)).write_pdf(str(out_path))
+    return out_path
+```
+
+---
+
+# Stage 12 — Packaging (Tauri Executable)
+
+## Prerequisites
+All previous stages complete and tested end-to-end.
+
+## Objective
+Package the entire application into a distributable single-file executable for Windows, Linux, and macOS.
+
+## Step 1 — Bundle Python Sidecar with PyInstaller
+
+```
+pip install pyinstaller
+pyinstaller --onefile --name python-sidecar backend/sidecar_entry.py
+```
+
+Create `backend/sidecar_entry.py`:
+
+```python
+import subprocess, sys, os, threading, time
+
+def start_service(cmd, name):
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    print(f"{name} started (PID {proc.pid})")
+    return proc
+
+if __name__ == "__main__":
+    procs = [
+        start_service(["uvicorn", "api.main:app", "--host", "127.0.0.1", "--port", "8000"], "FastAPI"),
+        start_service(["mlflow", "server", "--host", "127.0.0.1", "--port", "5000"], "MLflow"),
+        start_service(["prefect", "worker", "start"], "Prefect"),
+        start_service(["mage", "start", "raphael_mage", "--host", "127.0.0.1", "--port", "6789"], "Mage.ai"),
+    ]
+    try:
+        while True:
+            time.sleep(5)
+    except KeyboardInterrupt:
+        for p in procs:
+            p.terminate()
+```
+
+Copy output binary to Tauri sidecar location:
+```
+cp dist/python-sidecar src-tauri/binaries/python-sidecar-x86_64-pc-windows-msvc.exe
+```
+
+## Step 2 — Configure Tauri Sidecar in tauri.conf.json
+
+```json
+{
+  "bundle": {
+    "externalBin": ["binaries/python-sidecar"]
+  }
+}
+```
+
+## Step 3 — Implement Sidecar Manager in Rust
+
+Add to `src-tauri/src/sidecar.rs`:
+
+```rust
+use tauri::Manager;
+use tauri_plugin_shell::ShellExt;
+
+pub fn start_python_sidecar(app: &tauri::AppHandle) {
+    let sidecar = app.shell().sidecar("python-sidecar").unwrap();
+    let (_rx, child) = sidecar.spawn().expect("Failed to start Python sidecar");
+    println!("Python sidecar started");
+}
+```
+
+## Step 4 — Build the Executable
+
+```
+npm run tauri build
+```
+
+Output locations:
+```
+Windows:  src-tauri/target/release/bundle/nsis/raphael_1.0.0_x64-setup.exe
+Linux:    src-tauri/target/release/bundle/appimage/raphael_1.0.0_amd64.AppImage
+macOS:    src-tauri/target/release/bundle/dmg/raphael_1.0.0_x64.dmg
+```
+
+## Step 5 — Test the Packaged Executable
+
+Run the installer on a clean machine with none of the development tools installed.
+
+```
+Checklist:
+Double-click installer — installs without errors
+Application opens — Tauri window appears
+Dark map loads with PMTiles tiles
+AQ data shows after 60 seconds (first sync)
+Risk scores computed and visible on map
+Alert rules can be created
+PDF report generates and downloads
+Application closes cleanly from system tray
+No Python or Node.js installation needed on target machine
+```
+
+## Step 6 — Create GitHub Actions Release Pipeline
+
+```yaml
+# .github/workflows/release.yml
+name: Release Raphael
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm install
+      - run: pip install -r backend/requirements.txt pyinstaller
+      - run: pyinstaller --onefile --name python-sidecar backend/sidecar_entry.py
+      - run: cp dist/python-sidecar* src-tauri/binaries/
+      - run: npm run tauri build
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: src-tauri/target/release/bundle/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
