@@ -1,0 +1,12 @@
+# Web framework
+fastapi==0.110.2
+uvicorn[standard]==0.28.0
+pydantic==2.7.0
+pydantic-settings==2.2.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.9
+
+# Database
+sqlalchemy==1.4.52
+geoalchemy2==0.15.0
