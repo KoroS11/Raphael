@@ -40,3 +40,17 @@ class Region(Base):
     name         = Column(String(200), nullable=False)
     country_code = Column(String(3), nullable=False)
     bbox         = Column(Geometry("POLYGON", srid=4326), nullable=False)
+    admin_level  = Column(Integer, default=2)
+    pmtiles_path = Column(Text)
+    created_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    is_active    = Column(Boolean, default=False)
+
+class Source(Base):
+    __tablename__ = "sources"
+    id             = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key            = Column(String(50), unique=True, nullable=False)
+    name           = Column(String(200), nullable=False)
+    category       = Column(String(50), nullable=False)
+    layer_types    = Column(JSON, nullable=False) # stored as JSON list for database portability
+    base_url       = Column(Text)
+    is_enabled     = Column(Boolean, default=True)
