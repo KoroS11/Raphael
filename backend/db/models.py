@@ -26,3 +26,17 @@ class User(Base):
 
 class ActivityLog(Base):
     __tablename__ = "activity_log"
+    id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id       = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    action        = Column(String(100), nullable=False)
+    resource_type = Column(String(50))
+    resource_id   = Column(UUID(as_uuid=True))
+    metadata_json = Column("metadata", JSON) # maps to JSONB in Postgres, JSON/TEXT in SQLite
+    performed_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class Region(Base):
+    __tablename__ = "regions"
+    id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name         = Column(String(200), nullable=False)
+    country_code = Column(String(3), nullable=False)
+    bbox         = Column(Geometry("POLYGON", srid=4326), nullable=False)
