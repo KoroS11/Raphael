@@ -158,3 +158,57 @@ def run_gaussian_plume(db: Session, region_id: str) -> List[dict]:
     For each anomalous AQ station in the active region (last 24 h):
       1. Retrieve latest PM2.5 value and derive Q (emission proxy).
       2. Fetch wind speed from weather observations.
+      3. Compute centre-line concentrations at RECEPTOR_DISTANCES_KM.
+      4. Persist one ml_outputs row per receptor point.
+
+    Returns a list of result dicts (one per plume row written).
+    """
+    from db.models import MLOutput
+
+    # ── 1. Find anomalous AQ stations ────────────────────────────────────────
+    sources = db.execute(text("""
+        SELECT
+            o.station_id,
+            o.station_name,
+            AVG(o.value)            AS pm25,
+            ST_X(o.geometry)        AS lon,
+            ST_Y(o.geometry)        AS lat,
+            COUNT(*)                AS n_obs
+        FROM raw_observations o
+        WHERE o.region_id   = :region_id
+          AND o.layer_type  = 'aq'
+          AND o.is_anomalous = 1
+          AND o.observed_at >= datetime('now', '-24 hours')
+          AND o.geometry IS NOT NULL
+        GROUP BY o.station_id, o.station_name, o.geometry
+        HAVING COUNT(*) >= 1
+        LIMIT 10
+    """), {"region_id": region_id}).fetchall()
+
+    if not sources:
+        log.info("gaussian_plume_skip", reason="No anomalous AQ stations in last 24h")
+        return []
+
+    # ── 2. Wind speed from weather observations ───────────────────────────────
+    wind_row = db.execute(text("""
+        SELECT value
+        FROM raw_observations
+        WHERE region_id = :region_id
+          AND layer_type = 'weather'
+          AND (unit LIKE '%m/s%' OR unit LIKE '%wind%' OR station_name LIKE '%wind%')
+          AND observed_at >= datetime('now', '-6 hours')
+        ORDER BY observed_at DESC
+        LIMIT 1
+    """), {"region_id": region_id}).fetchone()
+
+    wind_speed_ms = float(wind_row.value) if wind_row and wind_row.value else 3.5
+    wind_speed_ms = max(0.5, min(wind_speed_ms, 30.0))  # clamp
+
+    # Wind direction: default to north (360°) if unavailable
+    wind_dir_row = db.execute(text("""
+        SELECT value FROM raw_observations
+        WHERE region_id  = :region_id
+          AND layer_type = 'weather'
+          AND (unit LIKE '%deg%' OR unit LIKE '%direction%')
+          AND observed_at >= datetime('now', '-6 hours')
+        ORDER BY observed_at DESC LIMIT 1
