@@ -20,3 +20,14 @@ import numpy as np
 try:
     import mlflow
 except ImportError:
+    class MockMLflow:
+        def __getattr__(self, name):
+            def mock_func(*args, **kwargs):
+                class MockRun:
+                    @property
+                    def info(self):
+                        class MockInfo:
+                            @property
+                            def run_id(self):
+                                return "mock_run_id"
+                        return MockInfo()
