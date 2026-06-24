@@ -16,3 +16,40 @@ surface reasons for caution, not to overrule the Blue Team.
 Checks implemented:
   1. wind_consistency     — near-calm/missing wind undermines
                              plume-based corroboration
+  2. meteorological_plausibility — implausible wind readings
+  3. magnitude_sanity      — anomaly score near IF decision boundary
+  4. temporal_isolation    — single-reading spike vs sustained trend
+"""
+
+from dataclasses import dataclass, asdict
+from typing import Optional
+import pandas as pd
+from sqlalchemy import text
+
+# Thresholds — fixed, documented, not learned
+CALM_WIND_THRESHOLD_MS = 0.5
+MAX_PLAUSIBLE_WIND_MS = 40.0
+BORDERLINE_SCORE_THRESHOLD = 0.05
+TEMPORAL_WINDOW_HOURS = 3
+
+
+@dataclass
+class ChallengeResult:
+    station_name: str
+    observed_at: str
+    rule_id: str                # unchanged, copied from evidence for traceability
+    confidence: str              # unchanged, copied from evidence for traceability
+
+    wind_consistency_triggered: bool
+    wind_consistency_detail: str
+
+    meteorological_plausibility_triggered: bool
+    meteorological_plausibility_detail: str
+
+    magnitude_sanity_triggered: bool
+    magnitude_sanity_detail: str
+
+    temporal_isolation_triggered: Optional[bool]
+    temporal_isolation_detail: str
+
+    n_challenges_triggered: int
