@@ -24,3 +24,29 @@ study.
 
 from dataclasses import dataclass, field
 from typing import Optional
+
+
+@dataclass(frozen=True)
+class Rule:
+    rule_id: str
+    name: str
+    conditions: dict         # machine-parseable condition
+    evidence_used: tuple      # evidence sources this rule consumes
+    output: str                # confidence tier this rule assigns
+    rationale: str              # design justification (not a proof claim)
+    priority: int = 0            # placeholder for future rule ordering; unused
+    version: str = "1.0"
+
+
+RULE_REGISTRY = {
+    "R001": Rule(
+        rule_id="R001",
+        name="physics_corroborated_anomaly",
+        conditions={"if_anomaly": True, "plume_corroborated": True},
+        evidence_used=("IsolationForest", "GaussianPlume"),
+        output="HIGH",
+        rationale=(
+            "Agreement between the statistical detector and the "
+            "atmospheric dispersion model provides corroborating "
+            "evidence, increasing confidence in the detected event. "
+            "Note: the dispersion model's emission proxy is derived "
