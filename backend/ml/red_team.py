@@ -53,3 +53,39 @@ class ChallengeResult:
     temporal_isolation_detail: str
 
     n_challenges_triggered: int
+    robustness: str  # "ROBUST" | "FRAGILE"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def _check_wind_consistency(evidence) -> tuple:
+    if evidence.plume_corroborated is not True:
+        return False, "Not applicable — plume did not corroborate this anomaly."
+    if evidence.wind_speed is None:
+        return True, "Wind speed missing; plume corroboration cannot be trusted without meteorology."
+    if evidence.wind_speed < CALM_WIND_THRESHOLD_MS:
+        return True, (
+            f"Wind speed {evidence.wind_speed:.2f} m/s is near-calm "
+            f"(<{CALM_WIND_THRESHOLD_MS} m/s); plume direction and "
+            f"spread are unreliable at this wind speed, weakening "
+            f"the physics corroboration behind this HIGH confidence call."
+        )
+    return False, f"Wind speed {evidence.wind_speed:.2f} m/s supports reliable plume corroboration."
+
+
+def _check_meteorological_plausibility(evidence) -> tuple:
+    if evidence.wind_speed is None:
+        return False, "No wind data to evaluate."
+    if evidence.wind_speed < 0 or evidence.wind_speed > MAX_PLAUSIBLE_WIND_MS:
+        return True, f"Wind speed {evidence.wind_speed} m/s is outside plausible bounds (0-{MAX_PLAUSIBLE_WIND_MS} m/s)."
+    if evidence.wind_direction is not None and not (0 <= evidence.wind_direction <= 360):
+        return True, f"Wind direction {evidence.wind_direction} is outside valid range (0-360 degrees)."
+    return False, "Meteorological readings within plausible bounds."
+
+
+def _check_magnitude_sanity(evidence) -> tuple:
+    if evidence.anomaly_score is None:
+        return False, "No anomaly score available to evaluate."
+    if abs(evidence.anomaly_score) < BORDERLINE_SCORE_THRESHOLD:
+        return True, (
