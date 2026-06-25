@@ -207,3 +207,108 @@ def run_intelligence_cycle(region_id: str = None, db: Session = None):
                 })
 
                 verdict_counts = {}
+                for record in annotated:
+                    v = record["verdict"]
+                    verdict_counts[v] = verdict_counts.get(v, 0) + 1
+
+                log.info(f"symbolic_reconciliation_complete verdict_counts={verdict_counts} n_total={len(annotated)}")
+
+                explained_count = 0
+                for record in annotated:
+                    if record["verdict"] != "NORMAL":
+                        result = generate_explanation(record)
+                        if result["status"] == "ok":
+                            explained_count += 1
+                            log.info(f"gemma_explanation_generated station={record['evidence']['station_name']} verdict={record['verdict']}")
+
+                broadcast_sync({
+                    "type": "trace",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {
+                        "source": "symbolic_and_gemma",
+                        "message": (
+                            f"Symbolic Layer: {verdict_counts}. "
+                            f"Gemma: {explained_count} explanations generated"
+                        )
+                    }
+                })
+        except Exception as se:
+            log.error(f"symbolic_or_gemma_failed error={se}")
+
+        # ── STAGE 2: ATTRIBUTE ───────────────────────────────────
+        broadcast_sync({
+            "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "intelligence_runner",
+                "message": "\u2501\u2501 STAGE 2: ATTRIBUTE (Rule + RF Hybrid) \u2501\u2501"
+            }
+        })
+
+        # Get recently flagged anomalies
+        anomalies = db.execute(text("""
+            SELECT id, layer_type, value, anomaly_score,
+                   CAST(strftime('%H', observed_at) AS INTEGER) as hour,
+                   CAST(strftime('%w', observed_at) AS INTEGER) as day_of_week,
+                   CAST(strftime('%m', observed_at) AS INTEGER) as month
+            FROM raw_observations
+            WHERE is_anomalous = 1
+              AND observed_at >= datetime('now', '-24 hours')
+        """)).fetchall()
+
+        attributions = []
+        # Fetch weather context ONCE before attribution loop
+        weather_context = db.execute(text("""
+            SELECT station_id, value, unit, station_name
+            FROM raw_observations
+            WHERE layer_type = 'weather'
+              AND observed_at >= datetime('now', '-6 hours')
+            ORDER BY observed_at DESC
+            LIMIT 20
+        """)).fetchall()
+
+        # Extract wind speed once
+        wind_speed = next(
+            (w.value for w in weather_context
+             if w.unit and 'wind' in w.unit.lower()),
+            8.0
+        )
+
+        # Also fetch NDVI context once
+        ndvi_context = db.execute(text("""
+            SELECT AVG(value) as avg_ndvi
+            FROM raw_observations
+            WHERE layer_type = 'ndvi'
+              AND observed_at >= datetime('now', '-24 hours')
+        """)).scalar() or 0.15
+
+        # Fetch nearby fire count once
+        fire_count = db.execute(text("""
+            SELECT COUNT(*) FROM raw_observations
+            WHERE layer_type = 'fire'
+              AND observed_at >= datetime('now', '-24 hours')
+        """)).scalar() or 0
+
+        # NOW run attribution loop with pre-fetched context
+        for anomaly in anomalies[:20]:
+            obs_dict = {
+                "layer_type":    anomaly.layer_type,
+                "anomaly_score": anomaly.anomaly_score or 0,
+                "hour":          anomaly.hour or 12,
+                "day_of_week":   anomaly.day_of_week or 0,
+                "month":         anomaly.month or 6,
+            }
+            context_dict = {
+                "wind_speed":             wind_speed,
+                "lst_value":              anomaly.value
+                                          if anomaly.layer_type == "lst" else 38.0,
+                "ndvi_value":             ndvi_context,
+                "pm10_pm25_ratio":        1.8,
+                "zone_industrial":        False,
+                "neighbor_anomaly_count": anomaly_counts.get(anomaly.layer_type, 0),
+                "fire_count_nearby":      fire_count,
+            }
+
+            attribution = attributor.attribute(obs_dict, context_dict)
+            attributions.append(attribution)
+
