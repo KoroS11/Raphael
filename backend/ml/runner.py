@@ -521,3 +521,108 @@ def run_intelligence_cycle(region_id: str = None, db: Session = None):
             "status":          "complete",
             "anomalies":       anomaly_counts,
             "attributions":    len(attributions),
+            "forecasts":       forecast_count,
+            "risk_zones":      len(risk_results),
+            "plume_receptors": len(plume_results),
+            "insights":        insights
+        }
+
+    except Exception as e:
+        log.error("intelligence_cycle_failed", error=str(e))
+        broadcast_sync({
+            "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "intelligence_runner",
+                "message": f"Intelligence cycle failed: {str(e)}"
+            }
+        })
+        return {"status": "error", "message": str(e)}
+    finally:
+        if db_created:
+            db.close()
+
+
+def _recommend_action(zone: dict, attributions: list) -> dict:
+    """
+    Decision layer — maps risk score + attribution to recommended action.
+    Same role as CANOPY's Decide stage.
+    """
+    score = zone["risk_score"]
+
+    # Find dominant attribution for this zone's anomalies
+    dominant_cause = None
+    if attributions:
+        causes = [a["cause"] for a in attributions if a.get("cause")]
+        if causes:
+            dominant_cause = Counter(causes).most_common(1)[0][0]
+
+    if score >= 85:
+        if dominant_cause == "crop_burning":
+            return {
+                "action": ("Issue air quality emergency advisory. "
+                           "Activate GRAP Stage III restrictions. "
+                           "Coordinate with Punjab/Haryana on stubble "
+                           "burning enforcement."),
+                "authority": "State Environment Department",
+                "confidence": 0.88
+            }
+        elif dominant_cause == "urban_heat_island":
+            return {
+                "action": ("Open cooling centers in affected ward. "
+                           "Issue heat health alert via IMD. "
+                           "Deploy water tankers to high-density zones."),
+                "authority": "District Magistrate",
+                "confidence": 0.84
+            }
+        else:
+            return {
+                "action": ("Declare environmental emergency. "
+                           "Initiate multi-agency response protocol."),
+                "authority": "Delhi Pollution Control Committee",
+                "confidence": 0.79
+            }
+
+    elif score >= 70:
+        return {
+            "action": ("Activate enhanced monitoring. "
+                       "Issue public advisory for sensitive groups. "
+                       "Prepare contingency restrictions."),
+            "authority": "Municipal Corporation",
+            "confidence": 0.75
+        }
+
+    elif score >= 50:
+        return {
+            "action": ("Continue monitoring. "
+                       "Alert field teams for ground verification."),
+            "authority": "Field Supervisor",
+            "confidence": 0.70
+        }
+
+    else:
+        return {
+            "action": ("No immediate action required. "
+                       "Maintain routine monitoring schedule."),
+            "authority": "Automated System",
+            "confidence": 0.90
+        }
+
+
+def run_intelligence_cycle_sync(region_id: str = None, db: Session = None):
+    """Make runner callable synchronously."""
+    return run_intelligence_cycle(region_id, db=db)
+
+
+if __name__ == "__main__":
+    result = run_intelligence_cycle_sync()
+    print(f"\n{'='*60}")
+    print(f"Intelligence Cycle Result: {result.get('status', 'unknown')}")
+    if result.get("status") == "complete":
+        print(f"  Anomalies:       {result.get('anomalies')}")
+        print(f"  Attributed:      {result.get('attributions')}")
+        print(f"  Forecasts:       {result.get('forecasts')}")
+        print(f"  Risk zones:      {result.get('risk_zones')}")
+        print(f"  Plume receptors: {result.get('plume_receptors')}")
+        print(f"  Insights:        {len(result.get('insights', []))}")
+    print(f"{'='*60}")
