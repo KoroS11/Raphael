@@ -312,3 +312,212 @@ def run_intelligence_cycle(region_id: str = None, db: Session = None):
             attribution = attributor.attribute(obs_dict, context_dict)
             attributions.append(attribution)
 
+            broadcast_sync({
+                "type": "anomaly",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "layer_type":  anomaly.layer_type,
+                    "value":       anomaly.value,
+                    "cause":       attribution["cause"],
+                    "confidence":  attribution["confidence"],
+                    "explanation": attribution["explanation"],
+                    "challenged":  attribution["challenged"],
+                    "method":      attribution["method"]
+                }
+            })
+
+        broadcast_sync({
+            "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "intelligence_runner",
+                "message": f"Attribution complete: {len(attributions)} anomalies attributed"
+            }
+        })
+
+        # ── STAGE 3: FORECAST ────────────────────────────────────
+        broadcast_sync({
+            "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "intelligence_runner",
+                "message": "\u2501\u2501 STAGE 3: FORECAST (Prophet) \u2501\u2501"
+            }
+        })
+
+        # Get top zones by risk or by data density
+        top_zones = db.execute(text("""
+            SELECT DISTINCT zone_id FROM ml_outputs
+            WHERE model_type = 'risk_score'
+            ORDER BY value DESC LIMIT 5
+        """)).fetchall()
+
+        if not top_zones:
+            # First run fallback — use all zones in active region
+            top_zones = db.execute(text("""
+                SELECT id as zone_id FROM zone_geometries
+                WHERE region_id = :region_id
+            """), {"region_id": region_id}).fetchall()
+            log.info("forecast_bootstrap", 
+                     message="No prior risk scores found, forecasting all zones")
+
+        forecast_count = 0
+        for zone_row in top_zones:
+            zone_id = str(zone_row[0])
+            for layer in ["aq", "lst"]:
+                try:
+                    import numpy as np
+                    from ml.forecast import run_hybrid_forecast
+                    hybrid_result = run_hybrid_forecast(db, zone_id=zone_id, layer_type=layer)
+                    if hybrid_result and hybrid_result.get("status") == "complete":
+                        f_list = hybrid_result.get("forecasts", [])
+                        forecast_count += len(f_list)
+                        if f_list:
+                            yhats = [f.get("yhat", 0.0) for f in f_list]
+                            mean_val = float(np.mean(yhats)) if yhats else 0.0
+                            peak_val = float(np.max(yhats)) if yhats else 0.0
+                            broadcast_sync({
+                                "type": "forecast",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "payload": {
+                                    "zone_id":      zone_id,
+                                    "layer_type":   layer,
+                                    "forecast_mean": mean_val,
+                                    "forecast_peak": peak_val,
+                                    "explanation":  f"Prophet+LSTM hybrid forecast computed. Mean: {mean_val:.2f}, peak: {peak_val:.2f}",
+                                    "mlflow_run_id": "hybrid_run"
+                                }
+                            })
+                except Exception as fe:
+                    log.error("hybrid_forecast_failed", 
+                              zone_id=str(zone_id), error=str(fe))
+
+        broadcast_sync({
+            "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "intelligence_runner",
+                "message": f"Forecast complete: {forecast_count} zone-layer forecasts"
+            }
+        })
+
+        # ── STAGE 4: DECIDE ──────────────────────────────────────
+        broadcast_sync({
+            "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "intelligence_runner",
+                "message": "\u2501\u2501 STAGE 4: DECIDE (Risk + Recommend) \u2501\u2501"
+            }
+        })
+
+        cluster_zones(db, region_id)
+        risk_results = compute_all_risk_scores(db, region_id)
+
+        # Broadcast top 3 risk zones as decisions
+        top_risks = sorted(
+            risk_results,
+            key=lambda x: x["risk_score"],
+            reverse=True
+        )[:3]
+
+        for zone in top_risks:
+            action = _recommend_action(zone, attributions)
+
+            broadcast_sync({
+                "type": "risk_score",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "zone_id":            zone["zone_id"],
+                    "zone_name":          zone["zone_name"],
+                    "risk_score":         zone["risk_score"],
+                    "category":           zone["category"],
+                    "explanation":        zone["explanation"],
+                    "recommended_action": action["action"],
+                    "action_authority":   action["authority"],
+                    "confidence":         action["confidence"]
+                }
+            })
+
+        # Generate AI insights
+        insights = generate_ai_insights(db, region_id)
+
+        # Evaluate rule-based alert conditions
+        try:
+            from ml.alerts_evaluator import evaluate_alerts
+            evaluate_alerts(db, region_id)
+        except Exception as ae:
+            log.error("alerts_evaluation_failed", error=str(ae))
+
+        # ── STAGE 5: DISPERSE ────────────────────────────────────
+        broadcast_sync({
+            "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "intelligence_runner",
+                "message": "\u2501\u2501 STAGE 5: DISPERSE (Gaussian Plume) \u2501\u2501"
+            }
+        })
+
+        plume_results = []
+        try:
+            plume_results = run_gaussian_plume(db, region_id)
+
+            # Broadcast top-5 receptor concentrations
+            for p in plume_results[:5]:
+                broadcast_sync({
+                    "type": "plume",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {
+                        "source_station":  p["source_station"],
+                        "distance_km":     p["distance_km"],
+                        "receptor_lat":    p["receptor_lat"],
+                        "receptor_lon":    p["receptor_lon"],
+                        "concentration":   p["concentration"],
+                        "pg_class":        p["pg_class"],
+                        "wind_speed_ms":   p["wind_speed_ms"],
+                    }
+                })
+
+            broadcast_sync({
+                "type": "trace",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "source": "intelligence_runner",
+                    "message": (
+                        f"Dispersion complete: {len(plume_results)} receptor "
+                        f"concentration estimates persisted"
+                    )
+                }
+            })
+        except Exception as pe:
+            log.error("gaussian_plume_failed", error=str(pe))
+            broadcast_sync({
+                "type": "trace",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "source": "intelligence_runner",
+                    "message": f"Stage 5 DISPERSE failed (non-fatal): {str(pe)}"
+                }
+            })
+
+        broadcast_sync({
+            "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "intelligence_runner",
+                "message": (
+                    f"Cycle complete \u2014 "
+                    f"{total_anomalies} anomalies, "
+                    f"{len(attributions)} attributed, "
+                    f"{forecast_count} forecasts, "
+                    f"{len(risk_results)} zones scored, "
+                    f"{len(plume_results)} plume receptors"
+                )
+            }
+        })
+
+        return {
+            "status":          "complete",
+            "anomalies":       anomaly_counts,
+            "attributions":    len(attributions),
