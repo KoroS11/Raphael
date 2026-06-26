@@ -1,0 +1,55 @@
+"""
+Raphael — Stage 3: FORECAST (Prophet per Zone per Layer)
+
+Trains a Prophet model per zone per layer type and generates 48-hour
+forecasts with exceedance windows. All runs tracked in MLflow.
+"""
+import os
+import sys
+
+# Windows DLL overrides for MKL/OMP and Stan compiler
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+conda_prefix = os.environ.get("CONDA_PREFIX") or r"C:\Users\harsh\anaconda3\envs\raphael-env"
+lib_bin = os.path.join(conda_prefix, "Library", "bin")
+if os.path.exists(lib_bin) and lib_bin not in os.environ["PATH"]:
+    os.environ["PATH"] = lib_bin + os.pathsep + os.environ["PATH"]
+
+import uuid
+import pandas as pd
+import numpy as np
+try:
+    import mlflow
+except ImportError:
+    class MockMLflow:
+        def __getattr__(self, name):
+            def mock_func(*args, **kwargs):
+                class MockRun:
+                    @property
+                    def info(self):
+                        class MockInfo:
+                            @property
+                            def run_id(self):
+                                return "mock_run_id"
+                        return MockInfo()
+                return MockRun()
+            return mock_func
+    mlflow = MockMLflow()
+
+from prophet import Prophet
+from datetime import datetime, timezone
+from typing import Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+
+try:
+    mlflow.set_tracking_uri(f"http://127.0.0.1:{os.getenv('MLFLOW_PORT', '5000')}")
+except Exception:
+    pass
+
+MIN_OBS = 30       # Minimum observations required to train
+HORIZON_HRS = 48   # Forecast horizon
+
+
+def train_and_forecast(
+    db: Session,
+    zone_id: str,
