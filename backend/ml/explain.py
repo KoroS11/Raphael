@@ -12,3 +12,7 @@ back into confidence, rule_id, robustness, or verdict. Those are
 already final by the time this layer runs. This preserves the
 "Gemma explains, does not decide" boundary from the architecture
 contract.
+"""
+
+import requests
+import json
