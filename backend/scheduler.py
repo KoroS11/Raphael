@@ -76,3 +76,22 @@ def job_waqi():
 
 
 def job_iqair():
+    from ingestion.flows.aq_iqair import iqair_flow
+    _safe_run("iqair", iqair_flow)
+
+
+def job_openmeteo():
+    from ingestion.flows.weather_openmeteo import openmeteo_flow
+    _safe_run("openmeteo", openmeteo_flow)
+
+
+def job_gdacs():
+    from ingestion.flows.hazard_gdacs import gdacs_flow
+    _safe_run("gdacs", gdacs_flow)
+
+
+def job_firms():
+    from ingestion.flows.fire_firms import firms_flow
+    _safe_run("firms", firms_flow)
+
+
