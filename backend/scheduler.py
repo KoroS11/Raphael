@@ -37,3 +37,22 @@ log = logging.getLogger("raphael.scheduler")
 
 # ── APScheduler ──────────────────────────────────────────────────────────────
 try:
+    from apscheduler.schedulers.blocking import BlockingScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+    from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+except ImportError as e:
+    log.critical("APScheduler not installed. Run: pip install apscheduler>=3.10.0")
+    raise
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# INGESTION JOB WRAPPERS
+# Each wrapper imports the flow lazily (avoids import-time side-effects)
+# and calls the flow with default parameters (Pune region).
+# ════════════════════════════════════════════════════════════════════════════
+
+def _safe_run(label: str, fn, *args, **kwargs):
+    """Execute fn with basic error isolation and timing."""
+    started = datetime.now(timezone.utc)
+    try:
+        log.info("[%s] starting", label)
