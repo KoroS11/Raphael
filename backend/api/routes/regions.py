@@ -81,3 +81,20 @@ async def create_region(payload: dict, db: Session = Depends(get_db), _user = De
         "errors": []
     }
 
+@router.put("/{id}")
+async def update_region(id: str, payload: dict, db: Session = Depends(get_db), _user = Depends(get_current_user)):
+    return {
+        "status": "success",
+        "data": {"id": id},
+        "meta": {},
+        "errors": []
+    }
+
+@router.delete("/{id}")
+async def delete_region(id: str, db: Session = Depends(get_db), _user = Depends(get_current_user)):
+    return {
+        "status": "success",
+        "data": {"id": id, "deleted": True},
+        "meta": {},
+        "errors": []
+    }

@@ -393,3 +393,83 @@ def upgrade() -> None:
         op.execute("SELECT AddGeometryColumn('alert_rules', 'geometry', 4326, 'GEOMETRY', 'XY');")
         op.execute("SELECT CreateSpatialIndex('alert_rules', 'geometry');")
 
+        op.execute("""
+        CREATE TABLE alert_events (
+            id              TEXT PRIMARY KEY,
+            rule_id         TEXT NOT NULL REFERENCES alert_rules(id),
+            triggered_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            observed_value  REAL NOT NULL,
+            acknowledged    BOOLEAN DEFAULT 0,
+            acknowledged_at DATETIME,
+            acknowledged_by TEXT REFERENCES users(id)
+        );
+        """)
+        # location added via AddGeometryColumn
+        op.execute("SELECT AddGeometryColumn('alert_events', 'location', 4326, 'POINT', 'XY');")
+        op.execute("SELECT CreateSpatialIndex('alert_events', 'location');")
+
+        op.execute("CREATE INDEX idx_alert_events_rule      ON alert_events(rule_id);")
+        op.execute("CREATE INDEX idx_alert_events_triggered ON alert_events(triggered_at);")
+
+        op.execute("""
+        CREATE TABLE import_datasets (
+            id              TEXT PRIMARY KEY,
+            user_id         TEXT NOT NULL REFERENCES users(id),
+            name            TEXT NOT NULL,
+            format          TEXT NOT NULL CHECK (format IN ('csv', 'geojson', 'kml', 'shapefile', 'excel')),
+            row_count       INTEGER,
+            schema_map      TEXT NOT NULL,
+            layer_type      TEXT,
+            mage_pipeline_id TEXT,
+            imported_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+            is_visible      BOOLEAN DEFAULT 1
+        );
+        """)
+
+        op.execute("""
+        CREATE TABLE event_markers (
+            id              TEXT PRIMARY KEY,
+            user_id         TEXT NOT NULL REFERENCES users(id),
+            name            TEXT NOT NULL,
+            description     TEXT,
+            zone_id         TEXT REFERENCES zone_geometries(id),
+            event_date      DATE NOT NULL,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        # geometry added via AddGeometryColumn
+        op.execute("SELECT AddGeometryColumn('event_markers', 'geometry', 4326, 'GEOMETRY', 'XY');")
+        op.execute("SELECT CreateSpatialIndex('event_markers', 'geometry');")
+
+
+def downgrade() -> None:
+    bind = op.get_bind()
+    dialect_name = bind.dialect.name
+
+    tables = [
+        "activity_log",
+        "event_markers",
+        "import_datasets",
+        "alert_events",
+        "alert_rules",
+        "ml_outputs",
+        "raster_tiles",
+        "raw_observations",
+        "zone_geometries",
+        "regions",
+        "sources",
+        "users"
+    ]
+
+    if dialect_name == "postgresql":
+        for table in tables:
+            op.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
+    else:
+        # For SpatiaLite SQLite, clean up geometry columns and drop tables
+        for table in tables:
+            # We can drop tables directly, but to be safe we drop them
+            op.execute(f"DROP TABLE IF EXISTS {table};")
+        
+        # Clean up spatial metadata references for dropped tables
+        op.execute("DELETE FROM geometry_columns WHERE f_table_name IN ('regions', 'raw_observations', 'zone_geometries', 'raster_tiles', 'ml_outputs', 'alert_rules', 'alert_events', 'event_markers');")
+        op.execute("DELETE FROM sqlite_sen_geometry_columns WHERE f_table_name IN ('regions', 'raw_observations', 'zone_geometries', 'raster_tiles', 'ml_outputs', 'alert_rules', 'alert_events', 'event_markers');")

@@ -248,3 +248,54 @@ def compute_pcad_scores(db: Session,
     
     # Standard features (Model A)
     feat_A = ['value', 'hour_of_day', 'day_of_week', 
+              'is_weekend', 'rolling_mean_3h', 
+              'rolling_std_3h', 'z_score', 
+              'delta_1h', 'station_id_encoded']
+    
+    # Physics features (Model B — PCAD)
+    feat_B = feat_A + ['plume_conc']
+    
+    X_A = df[feat_A].fillna(0)
+    X_B = df[feat_B].fillna(0)
+    
+    # Try loading saved model, else train fresh
+    model_path = os.path.join(
+        os.path.dirname(__file__), 
+        '..', 'notebooks', 'models', 'if_tuned.pkl'
+    )
+    
+    if os.path.exists(model_path):
+        with open(model_path, 'rb') as f:
+            if_model = pickle.load(f)
+        # Refit on current data with same params
+        params = if_model.get_params()
+        if_B = IsolationForest(**params)
+    else:
+        if_B = IsolationForest(
+            n_estimators=200,
+            contamination=RECOMMENDED_CONTAMINATION,
+            random_state=42
+        )
+    
+    if_B.fit(X_B)
+    labels = if_B.predict(X_B)
+    scores = if_B.decision_function(X_B)
+    
+    df['if_anomaly'] = (labels == -1)
+    df['anomaly_score'] = -scores  # higher = more anomalous
+    df['plume_corroborated'] = df['plume_conc'] > CORROBORATION_THRESHOLD
+    
+    from ml.rules import evaluate_confidence
+
+    results = df.apply(
+        lambda row: evaluate_confidence(
+            bool(row['if_anomaly']), bool(row['plume_corroborated'])
+        ),
+        axis=1
+    )
+    df['confidence'] = results.apply(lambda r: r['confidence'])
+    df['rule_id'] = results.apply(lambda r: r['rule_id'])
+    
+    return df[['station_name', 'observed_at', 'value',
+               'if_anomaly', 'plume_conc', 'confidence',
+               'anomaly_score', 'rule_id']]

@@ -197,3 +197,43 @@ def write_waqi_to_db(stations: list, flow_obj: WAQIFlow) -> int:
         flow_obj.record_error(str(e))
         asyncio.run(broadcast({
             "type": "trace",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "source": "waqi",
+                "message": f"Error inserting WAQI observations into DB: {str(e)}"
+            }
+        }))
+        raise e
+
+@flow(name="waqi-ingestion")
+def waqi_flow():
+    flow_obj = WAQIFlow()
+    if not flow_obj.region:
+        print("No active region configured. Skipping.")
+        return
+
+    from db.queries import get_active_region_bbox
+    bbox = get_active_region_bbox(flow_obj.db)
+
+    stations = fetch_waqi_stations(bbox)
+    print(f"Fetched {len(stations)} WAQI stations")
+    
+    count = write_waqi_to_db(stations, flow_obj)
+    print(f"Wrote {count} WAQI observations")
+
+    # Broadcast standard sync status
+    asyncio.run(broadcast({
+        "type": "sync_status",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "source": "waqi",
+            "layer_type": "aq",
+            "count": count,
+            "status": "success"
+        }
+    }))
+    
+    flow_obj.close()
+
+if __name__ == "__main__":
+    waqi_flow()

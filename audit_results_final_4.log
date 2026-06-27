@@ -1,0 +1,128 @@
+
+============================================================
+  1. DATABASE INTEGRITY
+============================================================
+✅ PASS | Database engine detected — SpatiaLite
+✅ PASS | Table 'users' exists — 1 rows
+✅ PASS | Table 'regions' exists — 1 rows
+✅ PASS | Table 'sources' exists — 27 rows
+✅ PASS | Table 'raw_observations' exists — 705 rows
+✅ PASS | Table 'zone_geometries' exists — 3023 rows
+✅ PASS | Table 'raster_tiles' exists — 2 rows
+✅ PASS | Table 'ml_outputs' exists — 184 rows
+✅ PASS | Table 'alert_rules' exists — 0 rows
+✅ PASS | Table 'alert_events' exists — 0 rows
+✅ PASS | Table 'import_datasets' exists — 0 rows
+✅ PASS | Table 'event_markers' exists — 0 rows
+✅ PASS | Active region configured — Delhi NCT
+✅ PASS | Sources seeded — 27 sources
+✅ PASS | Admin user exists
+✅ PASS | GADM zones loaded — 3023 zones
+✅ PASS | Observations in DB — 705 total observations
+✅ PASS | Layer 'aq' has data — 63 observations
+✅ PASS | Layer 'weather' has data — 576 observations
+✅ PASS | Layer 'fire' has data — 3 observations
+✅ PASS | Layer 'hazard' has data — 63 observations
+✅ PASS | ML outputs exist — 184 total
+✅ PASS | Risk scores computed — 4 zones scored
+✅ PASS | Raster tiles exist — 2 tiles
+✅ PASS | LST tile file exists on disk — data\tiles\lst_2026-06-05.png
+✅ PASS | NDVI tile file exists on disk — data\tiles\ndvi_2026-06-05.png
+✅ PASS | Basic SQL query works — 63 AQ rows
+✅ PASS | Recent observations (last 24h) — 699 observations
+
+============================================================
+  2. API HEALTH
+============================================================
+✅ PASS | GET /health — {"status":"ok","service":"raphael-api"}
+✅ PASS | POST /auth/login — Token received
+✅ PASS | GET /system/status — DB: True
+✅ PASS | GET /regions — 1 regions
+✅ PASS | GET /layers/aq/current — 57 features
+✅ PASS | GET /layers/fire/current — 3 features
+✅ PASS | GET /layers/weather/current — 576 features
+✅ PASS | GET /layers/lst/tile — Content-Type: image/png
+✅ PASS | GET /layers/lst/tile-bounds — bounds: [76.8, 28.4, 77.4, 28.9]
+✅ PASS | GET /layers/ndvi/tile — Content-Type: image/png
+✅ PASS | GET /layers/ndvi/tile-bounds — bounds: [76.8, 28.4, 77.4, 28.9]
+✅ PASS | GET /layers/composite/risk — 4 scored zones
+✅ PASS | GET /zones — status: success
+✅ PASS | GET /system/insights — 2 insights
+✅ PASS | GET /alerts/rules — status: success
+✅ PASS | GET /imports/datasets — status: success
+✅ PASS | GET /reports — status code: 200
+✅ PASS | GET /users — 1 users
+
+============================================================
+  3. REAL API DATA vs MOCK DATA
+============================================================
+✅ PASS | Source 'gdacs' has observations — 63 obs, latest: 0.0h ago
+✅ PASS | Source 'nasa_firms' has observations — 3 obs, latest: 0.0h ago
+✅ PASS | Source 'open_meteo' has observations — 576 obs, latest: 0.0h ago
+✅ PASS | Source 'openaq' has observations — 21 obs, latest: 0.0h ago
+✅ PASS | Source 'waqi' has observations — 15 obs, latest: 0.0h ago
+✅ PASS | Data is primarily real (not mock) — 0 mock rows out of 708 total (0.0%)
+✅ PASS | WAQI_API_KEY configured — ✓ set
+✅ PASS | NASA_FIRMS_KEY configured — ✓ set
+✅ PASS | EARTHDATA_USERNAME configured — ✓ set
+✅ PASS | OWM_API_KEY configured — ✓ set
+❌ FAIL | OpenAQ live API reachable — 0 stations returned from live API
+✅ PASS | Open-Meteo live API reachable — status: 200
+✅ PASS | WAQI live API returning real data — 44 real stations from WAQI
+
+============================================================
+  4. ML PIPELINE
+============================================================
+✅ PASS | MLflow server reachable
+C:\Users\harsh\Raphael\backend\.venv\Lib\site-packages\requests\__init__.py:109: RequestsDependencyWarning: urllib3 (2.7.0) or chardet (7.4.3)/charset_normalizer (3.4.7) doesn't match a supported version!
+  warnings.warn(
+Importing plotly failed. Interactive plots will not work.
+✅ PASS | All ML modules import cleanly
+✅ PASS | Risk scores are fresh (< 24h) — Last computed 0.0h ago
+✅ PASS | Attribution module produces output — cause: crop_burning, conf: 0.91, method: rule
+
+============================================================
+  5. WEBSOCKET
+============================================================
+✅ PASS | WebSocket /ws receives broadcast — received event type: anomaly
+
+============================================================
+  6. PREFECT SCHEDULER
+============================================================
+✅ PASS | Prefect server reachable
+✅ PASS | Prefect deployments registered — 7 deployments active
+
+============================================================
+  7. RASTER TILES
+============================================================
+✅ PASS | data/tiles directory exists
+✅ PASS | PNG tiles exist in data/tiles — 4 PNG files
+✅ PASS | LST tiles exist — 2 LST tiles
+✅ PASS | NDVI tiles exist — 2 NDVI tiles
+✅ PASS | Thumbnail tiles exist — 2 thumbnails
+✅ PASS | LST tile lst_2026-06-05.png is valid size — 63.9 KB
+
+============================================================
+  8. IMPORT PIPELINE
+============================================================
+[raster] Capabilities: GDAL=True, Rasterio=True, HDF4=False
+[raster] Tiles directory: C:\Users\harsh\Raphael\data\tiles
+✅ PASS | Import validation works — valid: 3, invalid: 1
+DEBUG ingest result: {'status': 'success', 'ingested': 3, 'errors': []}
+✅ PASS | Import ingestion works — ingested: 3, skipped: 0
+
+============================================================
+  AUDIT SUMMARY
+============================================================
+
+  Total checks:  74
+  Passed:        73 ✅
+  Failed:        1 ❌
+  Score:         98.6%
+
+  FAILURES TO FIX BEFORE STAGE 12:
+  ❌ OpenAQ live API reachable
+     → 0 stations returned from live API
+
+  ⚠️  MOSTLY PASSING — Fix failures above before packaging
+

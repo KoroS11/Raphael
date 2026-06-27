@@ -158,3 +158,36 @@ def write_iqair(data: dict, flow_obj: IQAirFlow) -> int:
                 "source": "iqair",
                 "message": f"Error inserting IQAir nearest city to DB: {str(e)}"
             }
+        }))
+        raise e
+
+@flow(name="iqair-ingestion")
+def iqair_flow():
+    flow_obj = IQAirFlow()
+    if not flow_obj.region:
+        print("No active region configured. Skipping.")
+        return
+
+    from db.queries import get_active_region_centroid
+    lat, lon = get_active_region_centroid(flow_obj.db)
+
+    data = fetch_iqair(lat, lon)
+    count = write_iqair(data, flow_obj)
+    print(f"Wrote {count} IQAir observations")
+
+    # Broadcast standard sync status
+    asyncio.run(broadcast({
+        "type": "sync_status",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "source": "iqair",
+            "layer_type": "aq",
+            "count": count,
+            "status": "success"
+        }
+    }))
+    
+    flow_obj.close()
+
+if __name__ == "__main__":
+    iqair_flow()

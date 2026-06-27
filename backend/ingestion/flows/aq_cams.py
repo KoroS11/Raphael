@@ -13,3 +13,6 @@ class CopernicusCAMSFlow(BaseIngestionFlow):
 def aq_cams_flow():
     print("[STUB] copernicus_cams ingestion not yet implemented")
     print("Will be completed in Stage 05 (raster flows) or Stage 09")
+
+if __name__ == "__main__":
+    aq_cams_flow()

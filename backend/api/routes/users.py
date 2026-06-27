@@ -50,3 +50,30 @@ async def list_users(
     ]
     return {
         "status": "success",
+        "data": data,
+        "meta": {"count": len(data)},
+        "errors": []
+    }
+
+@router.post("/")
+async def create_user(
+    req: CreateUserRequest,
+    db:  Session = Depends(get_db),
+    _user = Depends(require_role("admin"))
+):
+    user = User(
+        id=uuid.uuid4(),
+        username=req.username,
+        password_hash=hash_password(req.password),
+        display_name=req.display_name,
+        role=req.role,
+        organization=req.organization
+    )
+    db.add(user)
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": str(user.id)},
+        "meta": {},
+        "errors": []
+    }

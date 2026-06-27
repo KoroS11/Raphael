@@ -212,3 +212,110 @@ def run_gaussian_plume(db: Session, region_id: str) -> List[dict]:
           AND (unit LIKE '%deg%' OR unit LIKE '%direction%')
           AND observed_at >= datetime('now', '-6 hours')
         ORDER BY observed_at DESC LIMIT 1
+    """), {"region_id": region_id}).fetchone()
+
+    wind_dir_deg = float(wind_dir_row.value) if wind_dir_row and wind_dir_row.value else 270.0
+    # Plume disperses downwind of source — bearing = wind_dir (from) + 180
+    plume_bearing = (wind_dir_deg + 180.0) % 360.0
+
+    # ── 3. Current hour: daytime flag ─────────────────────────────────────────
+    utc_hour = datetime.now(timezone.utc).hour
+    daytime = 6 <= utc_hour < 20
+
+    pg_class = _pg_class_from_wind(wind_speed_ms, daytime)
+
+    # ── 4. Delete old plume outputs for this region ───────────────────────────
+    db.execute(text("""
+        DELETE FROM ml_outputs
+        WHERE model_type = 'gaussian_plume'
+          AND zone_id IN (
+              SELECT id FROM zone_geometries WHERE region_id = :region_id
+          )
+    """), {"region_id": region_id})
+
+    outputs = []
+    results = []
+
+    for src in sources:
+        src_lat = float(src.lat)
+        src_lon = float(src.lon)
+        pm25    = float(src.pm25 or 0.0)
+
+        if pm25 <= 0:
+            continue
+
+        # Emission rate proxy: 1 μg/m³ of PM2.5 ≈ 1 μg/s per station
+        URBAN_BASELINE_Q = 50000.0
+        Q_computed = pm25 * 1000.0 if pm25 > 0 else URBAN_BASELINE_Q
+        Q = max(1000.0, min(500000.0, Q_computed))
+
+        # Effective stack height: assume ground-level sources (H = 5 m)
+        H = 5.0
+
+        for dist_km in RECEPTOR_DISTANCES_KM:
+            dist_m = dist_km * 1000.0
+            C = centre_line_concentration(Q, wind_speed_ms, dist_m, H, pg_class)
+
+            rec_lat, rec_lon = _receptor_point(src_lat, src_lon, plume_bearing, dist_km)
+
+            # Nearest zone to receptor (best-effort)
+            zone_row = db.execute(text("""
+                SELECT id FROM zone_geometries
+                WHERE region_id = :region_id
+                ORDER BY ST_Distance(
+                    MakePoint(:lon, :lat, 4326),
+                    Centroid(geometry)
+                ) ASC
+                LIMIT 1
+            """), {"region_id": region_id, "lat": rec_lat, "lon": rec_lon}).fetchone()
+
+            zone_id = str(zone_row.id) if zone_row else None
+
+            explanation = json.dumps({
+                "source_station":  src.station_name,
+                "source_pm25":     round(pm25, 1),
+                "emission_proxy_Q": round(Q, 1),
+                "wind_speed_ms":   round(wind_speed_ms, 1),
+                "wind_dir_deg":    round(wind_dir_deg, 1),
+                "pg_stability":    pg_class,
+                "distance_km":     dist_km,
+                "stack_height_m":  H,
+                "sigma_y_m":       round(_sigma_y(pg_class, dist_m), 1),
+                "sigma_z_m":       round(_sigma_z(pg_class, dist_m), 1),
+            })
+
+            row = MLOutput(
+                id=uuid.uuid4(),
+                zone_id=zone_id,
+                geometry=f"SRID=4326;POINT({rec_lon} {rec_lat})",
+                model_type="gaussian_plume",
+                output_type="centre_line_concentration",
+                layer_type="aq",
+                value=round(C, 3),
+                explanation=explanation,
+                model_version="gauss-pg-v1.0",
+                computed_at=datetime.now(timezone.utc),
+            )
+            outputs.append(row)
+            results.append({
+                "source_station": src.station_name,
+                "distance_km":    dist_km,
+                "receptor_lat":   round(rec_lat, 6),
+                "receptor_lon":   round(rec_lon, 6),
+                "concentration":  round(C, 3),
+                "pg_class":       pg_class,
+                "wind_speed_ms":  round(wind_speed_ms, 1),
+            })
+
+    if outputs:
+        db.bulk_save_objects(outputs)
+        db.commit()
+
+    log.info(
+        "gaussian_plume_complete",
+        sources=len(sources),
+        receptors=len(outputs),
+        wind_ms=round(wind_speed_ms, 1),
+        pg_class=pg_class,
+    )
+    return results
