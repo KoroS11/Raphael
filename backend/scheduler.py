@@ -17,3 +17,23 @@ terminal or wrap in a service manager (e.g. NSSM).
 """
 
 import sys
+import os
+import logging
+import time
+from datetime import datetime, timezone
+
+# ── Path bootstrap ───────────────────────────────────────────────────────────
+_backend_dir = os.path.dirname(os.path.abspath(__file__))
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+log = logging.getLogger("raphael.scheduler")
+
+# ── APScheduler ──────────────────────────────────────────────────────────────
+try:
