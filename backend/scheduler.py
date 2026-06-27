@@ -56,3 +56,23 @@ def _safe_run(label: str, fn, *args, **kwargs):
     started = datetime.now(timezone.utc)
     try:
         log.info("[%s] starting", label)
+        result = fn(*args, **kwargs)
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        log.info("[%s] finished in %.1fs — %s", label, elapsed, result)
+        return result
+    except Exception as exc:
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        log.error("[%s] FAILED after %.1fs: %s", label, elapsed, exc, exc_info=True)
+
+
+def job_openaq():
+    from ingestion.flows.aq_openaq import openaq_flow
+    _safe_run("openaq", openaq_flow)
+
+
+def job_waqi():
+    from ingestion.flows.aq_waqi import waqi_flow
+    _safe_run("waqi", waqi_flow)
+
+
+def job_iqair():
