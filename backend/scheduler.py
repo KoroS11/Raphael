@@ -95,3 +95,23 @@ def job_firms():
     _safe_run("firms", firms_flow)
 
 
+def job_lst_modis():
+    from ingestion.flows.lst_modis import lst_modis_flow
+    _safe_run("lst_modis", lst_modis_flow)
+
+
+def job_intelligence_cycle():
+    """
+    Stage 5-stage ML Intelligence Cycle (Detect → Attribute → Forecast
+    → Decide → Disperse). Runs after ingestion jobs have had time to
+    complete. Uses its own DB session to avoid session-sharing issues
+    across scheduler threads.
+    """
+    from db.connection import SessionLocal
+    from ml.runner import run_intelligence_cycle
+
+    db = SessionLocal()
+    try:
+        _safe_run("intelligence_cycle", run_intelligence_cycle, db=db)
+    finally:
+        db.close()
