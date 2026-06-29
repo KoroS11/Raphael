@@ -514,3 +514,132 @@ export function MapCanvas() {
               onClose={() => setClickedLocation(null)}
             />
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      <MapControls onZoomIn={() => setViewState(v => ({...v, zoom: v.zoom + 1}))}
+                   onZoomOut={() => setViewState(v => ({...v, zoom: v.zoom - 1}))}
+                   onNorth={() => setViewState(v => ({...v, bearing: 0}))}
+                   on3D={() => setViewState(v => ({...v, pitch: v.pitch > 0 ? 0 : 45}))}
+                   currentPitch={viewState.pitch} />
+
+      <CoordinateBar
+        lat={viewState.latitude}
+        lon={viewState.longitude}
+        zoom={viewState.zoom}
+      />
+    </div>
+  );
+}
+
+function MapTooltip({ content }: { content: any }) {
+  const props = content?.properties ?? content;
+  if (!props) return null;
+
+  // AQ station tooltip — matches mockup popup style
+  if (props.station_name && props.aqi !== undefined) {
+    return (
+      <div className="bg-[#0d1117]/90 border border-blue-500/30 rounded-lg px-3 py-2 text-sm backdrop-blur-sm min-w-[160px]">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+          <span className="font-medium text-white">{props.station_name}</span>
+        </div>
+        <div className="text-blue-200 text-xs">AQI {props.aqi}</div>
+        <div className="text-gray-400 text-xs">{props.category}</div>
+      </div>
+    );
+  }
+
+  // Fire anomaly tooltip — matches mockup
+  if (props.name?.includes("Fire") || props.layer_type === "fire") {
+    return (
+      <div className="bg-red-950/90 border border-red-500/40 rounded-lg px-3 py-2 text-sm">
+        <div className="font-medium text-red-200">Heat Anomaly</div>
+        <div className="text-red-400 text-xs">High Intensity</div>
+      </div>
+    );
+  }
+
+  // Zone / boundary tooltip
+  if (props.zone_name || props.name) {
+    return (
+      <div className="bg-[#0d1117]/90 border border-white/10 rounded-lg px-3 py-2 text-sm">
+        <div className="font-medium text-white">{props.zone_name ?? props.name}</div>
+        {props.risk_score && (
+          <div className="text-orange-400 text-xs">Risk Score: {props.risk_score}/100</div>
+        )}
+      </div>
+    );
+  }
+
+  return null;
+}
+```
+
+---
+
+## Step 6 — Create the Layers Panel
+
+This is the left-side panel in the mockup with all toggleable layers and opacity sliders.
+
+Create `src/components/map/LayersPanel.tsx`:
+
+```typescript
+import { Switch } from "../ui/switch";
+import { Slider } from "../ui/slider";
+import { useMapStore } from "../../store/mapStore";
+import { motion } from "framer-motion";
+import { X } from "lucide-react";
+
+const LAYER_DEFINITIONS = [
+  { id: "lst",        label: "Land Surface Temp",   color: "#ff4444", icon: "🌡" },
+  { id: "aq",         label: "Air Quality (PM2.5)",  color: "#a855f7", icon: "💨" },
+  { id: "ndvi",       label: "NDVI (Green Cover)",   color: "#22c55e", icon: "🌿" },
+  { id: "fire",       label: "Fire / Heat Anomalies",color: "#ef4444", icon: "🔥" },
+  { id: "precipitation", label: "Precipitation",    color: "#3b82f6", icon: "🌧" },
+  { id: "urban",      label: "Urban Density",        color: "#f59e0b", icon: "🏙" },
+  { id: "risk",       label: "Risk Score (AI)",      color: "#f97316", icon: "⚠" },
+  { id: "stations",   label: "AQ Stations",          color: "#06b6d4", icon: "📍" },
+  { id: "boundaries", label: "Admin Boundaries",     color: "#64748b", icon: "🗺" },
+];
+
+const BASEMAP_OPTIONS = [
+  { id: "dark",      label: "Dark",      preview: "bg-gray-950" },
+  { id: "satellite", label: "Satellite", preview: "bg-emerald-950" },
+  { id: "light",     label: "Light",     preview: "bg-gray-100"  },
+  { id: "terrain",   label: "Terrain",   preview: "bg-yellow-900" },
+];
+
+export function LayersPanel({ onClose }: { onClose: () => void }) {
+  const { activeLayers, layerOpacity, basemap, toggleLayer, setOpacity, setBasemap } = useMapStore();
+
+  return (
+    <motion.div
+      initial={{ x: -280, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: -280, opacity: 0 }}
+      transition={{ type: "spring", damping: 25 }}
+      className="absolute left-0 top-0 z-10 w-72 bg-[#0a0f1a]/95 border-r border-white/10 h-full backdrop-blur-md flex flex-col"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+        <span className="text-sm font-semibold text-white">Layers</span>
+        <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+          <X size={16} />
+        </button>
+      </div>
+
+      {/* Layer toggles */}
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+        {LAYER_DEFINITIONS.map(layer => {
+          const isActive = activeLayers.includes(layer.id);
+          const opacity  = layerOpacity[layer.id] ?? 1.0;
+
+          return (
+            <div key={layer.id} className="rounded-lg px-3 py-2 hover:bg-white/5 transition-colors">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: layer.color }}
+                  />
