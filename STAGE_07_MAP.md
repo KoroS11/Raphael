@@ -256,3 +256,132 @@ export function buildNDVILayer(
   tileUrl: string,
   bounds: [number,number,number,number],
   visible: boolean,
+  opacity: number
+) {
+  return new BitmapLayer({
+    id:      "ndvi-bitmap-layer",
+    visible,
+    opacity,
+    bounds,  // [west, south, east, north]
+    image:   tileUrl,
+    pickable: false,
+  });
+}
+
+export function buildFireLayer(data: GeoJSON.FeatureCollection, visible: boolean, opacity: number) {
+  const pulseTime = Date.now() % 2000 / 2000; // 0-1 pulse cycle
+  const pulseRadius = 300 + pulseTime * 200;   // Expanding ring effect
+
+  return new ScatterplotLayer({
+    id:            "fire-scatter-layer",
+    data:          data.features.map(f => ({
+      position:  [f.geometry.coordinates[0], f.geometry.coordinates[1]] as [number,number],
+      value:     f.properties?.value ?? 1,
+      name:      f.properties?.station_name ?? "Fire Anomaly"
+    })),
+    visible,
+    opacity,
+    pickable:        true,
+    stroked:         true,
+    filled:          true,
+    radiusMinPixels: 6,
+    radiusMaxPixels: 20,
+    lineWidthMinPixels: 2,
+    getPosition:     d => d.position,
+    getRadius:       d => 400 + (d.value * 50),
+    getFillColor:    [255, 60, 0, 200],
+    getLineColor:    [255, 200, 0, 255],
+    getLineWidth:    2,
+  });
+}
+
+export function buildBoundaryLayer(
+  data: GeoJSON.FeatureCollection,
+  visible: boolean,
+  riskScores: Record<string, number>
+) {
+  return new GeoJsonLayer({
+    id:      "admin-boundary-layer",
+    data,
+    visible,
+    pickable:       true,
+    stroked:        true,
+    filled:         true,
+    lineWidthMinPixels: 1,
+    // Neon blue-white outline — matching mockup
+    getLineColor:   [0, 180, 255, 200],
+    getLineWidth:   2,
+    // Fill with very subtle risk tint
+    getFillColor:   (f: any) => {
+      const score = riskScores[f.properties?.id] ?? 0;
+      if (score >= 85) return [255, 0,   0,   30];
+      if (score >= 70) return [255, 128, 0,   20];
+      if (score >= 50) return [255, 255, 0,   15];
+      return                  [0,   200, 100, 10];
+    },
+    autoHighlight:  true,
+    highlightColor: [255, 255, 255, 30],
+  });
+}
+
+export function buildAQStationLayer(
+  data: GeoJSON.FeatureCollection,
+  visible: boolean
+) {
+  return new IconLayer({
+    id:       "aq-station-icon-layer",
+    data:     data.features.map(f => ({
+      position:     [f.geometry.coordinates[0], f.geometry.coordinates[1]] as [number,number],
+      station_name: f.properties?.station_name ?? "",
+      value:        f.properties?.value ?? 0,
+      aqi:          f.properties?.aqi ?? 0,
+      category:     f.properties?.aqi_category ?? "",
+    })),
+    visible,
+    pickable:        true,
+    iconAtlas:       "/icons/station-atlas.png",
+    iconMapping:     "/icons/station-atlas.json",
+    getIcon:         () => "station",
+    getSize:         28,
+    getPosition:     d => d.position,
+    getColor:        d => aqiColor(d.value),
+    sizeScale:       1,
+    billboard:       true,
+  });
+}
+
+export function buildUrbanDensityLayer(
+  data: GeoJSON.FeatureCollection,
+  visible: boolean,
+  opacity: number
+) {
+  return new ScreenGridLayer({
+    id:          "urban-density-layer",
+    data:        data.features.map(f => ({
+      position: [f.geometry.coordinates[0], f.geometry.coordinates[1]] as [number,number],
+      weight:   f.properties?.value ?? 1
+    })),
+    visible,
+    opacity,
+    cellSizePixels: 20,
+    colorRange:     [
+      [18,  18,  18,  0],
+      [30,  40,  80,  100],
+      [50,  80,  160, 180],
+      [80,  120, 220, 220],
+      [100, 160, 255, 255],
+    ],
+    getPosition: d => d.position,
+    getWeight:   d => d.weight,
+  });
+}
+```
+
+---
+
+## Step 5 — Create the Map Canvas Component
+
+Create `src/components/map/MapCanvas.tsx`:
+
+```typescript
+import { useEffect, useRef, useState, useCallback } from "react";
