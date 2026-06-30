@@ -127,3 +127,132 @@ export const darkStyle: StyleSpecification = {
         "text-opacity":     0.6,
         "text-halo-color":  "rgba(0,0,0,0.5)",
         "text-halo-width":  1
+      }
+    }
+  ]
+};
+
+export const satelliteStyle: StyleSpecification = {
+  version: 8,
+  name: "Raphael Satellite",
+  sources: {
+    satellite: {
+      type: "raster",
+      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      tileSize: 256
+    }
+  },
+  layers: [{ id: "satellite", type: "raster", source: "satellite" }]
+};
+
+export const lightStyle: StyleSpecification = {
+  version: 8,
+  name: "Raphael Light",
+  sources: {
+    protomaps: {
+      type: "vector",
+      url: `pmtiles://${DATA_DIR}/tiles/world_base.pmtiles`
+    }
+  },
+  glyphs: "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
+  layers: [
+    { id: "background", type: "background", paint: { "background-color": "#f8fafc" } },
+    { id: "water", type: "fill", source: "protomaps", "source-layer": "water",
+      paint: { "fill-color": "#bfdbfe" } },
+    { id: "buildings", type: "fill", source: "protomaps", "source-layer": "buildings",
+      paint: { "fill-color": "#e2e8f0" } },
+    { id: "roads", type: "line", source: "protomaps", "source-layer": "roads",
+      paint: { "line-color": "#94a3b8", "line-width": 1 } }
+  ]
+};
+
+export const styles = { dark: darkStyle, satellite: satelliteStyle, light: lightStyle };
+```
+
+---
+
+## Step 4 — Create deck.gl Layer Definitions
+
+Create `src/components/map/layers.ts`:
+
+```typescript
+import {
+  HeatmapLayer, ColumnLayer, BitmapLayer,
+  ScatterplotLayer, GeoJsonLayer, IconLayer, ScreenGridLayer
+} from "@deck.gl/layers";
+
+// AQI color scale matching mockup (purple 3D columns)
+const AQI_COLOR_SCALE = [
+  [0,   228, 0],    // Good       0-50    green
+  [255, 255, 0],    // Moderate   51-100  yellow
+  [255, 126, 0],    // Unhealthy  101-150 orange
+  [255, 0,   0],    // Unhealthy  151-200 red
+  [143, 63,  151],  // Very Poor  201-300 purple  ← matches mockup
+  [126, 0,   35],   // Hazardous  301+    maroon
+];
+
+function aqiColor(value: number): [number, number, number, number] {
+  if (value <= 50)  return [0,   228, 0,   200];
+  if (value <= 100) return [255, 255, 0,   200];
+  if (value <= 150) return [255, 126, 0,   200];
+  if (value <= 200) return [255, 0,   0,   200];
+  if (value <= 300) return [143, 63,  151, 220];
+  return               [126, 0,   35,  255];
+}
+
+export function buildAQLayer(data: GeoJSON.FeatureCollection, visible: boolean, opacity: number) {
+  const points = data.features.map(f => ({
+    position:     [f.geometry.coordinates[0], f.geometry.coordinates[1]] as [number,number],
+    elevation:    (f.properties?.value ?? 0) * 0.8,
+    color:        aqiColor(f.properties?.value ?? 0),
+    station_name: f.properties?.station_name ?? "",
+    value:        f.properties?.value ?? 0,
+    aqi:          f.properties?.aqi ?? 0,
+  }));
+
+  return new ColumnLayer({
+    id:              "aq-column-layer",
+    data:            points,
+    visible,
+    opacity,
+    diskResolution:  12,
+    radius:          350,
+    elevationScale:  1,
+    getPosition:     d => d.position,
+    getElevation:    d => d.elevation,
+    getFillColor:    d => d.color,
+    pickable:        true,
+    autoHighlight:   true,
+    highlightColor:  [255, 255, 255, 60],
+  });
+}
+
+export function buildLSTLayer(data: GeoJSON.FeatureCollection, visible: boolean, opacity: number) {
+  return new HeatmapLayer({
+    id:          "lst-heatmap-layer",
+    data:        data.features.map(f => ({
+      position: [f.geometry.coordinates[0], f.geometry.coordinates[1]] as [number,number],
+      weight:   (f.properties?.value ?? 20) / 50
+    })),
+    visible,
+    opacity,
+    radiusPixels: 50,
+    intensity:    1.5,
+    threshold:    0.03,
+    // Color range: blue -> cyan -> yellow -> orange -> red (matching mockup)
+    colorRange: [
+      [0,   0,   255, 0],
+      [0,   255, 255, 100],
+      [255, 255, 0,   180],
+      [255, 128, 0,   220],
+      [255, 0,   0,   255],
+    ],
+    getPosition: d => d.position,
+    getWeight:   d => d.weight,
+  });
+}
+
+export function buildNDVILayer(
+  tileUrl: string,
+  bounds: [number,number,number,number],
+  visible: boolean,
