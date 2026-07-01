@@ -385,3 +385,132 @@ Create `src/components/map/MapCanvas.tsx`:
 
 ```typescript
 import { useEffect, useRef, useState, useCallback } from "react";
+import { DeckGL } from "@deck.gl/react";
+import Map from "react-map-gl/maplibre";
+import { motion, AnimatePresence } from "framer-motion";
+import { useMapStore } from "../../store/mapStore";
+import { useDataStore } from "../../store/dataStore";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../../api/client";
+import {
+  buildAQLayer, buildLSTLayer, buildNDVILayer, buildFireLayer,
+  buildBoundaryLayer, buildAQStationLayer, buildUrbanDensityLayer
+} from "./layers";
+import { LocationDetailPanel } from "../panels/LocationDetailPanel";
+import { CoordinateBar } from "./CoordinateBar";
+import { MapControls } from "./MapControls";
+import { darkStyle, satelliteStyle, lightStyle } from "./styles";
+import "maplibre-gl/dist/maplibre-gl.css";
+
+const INITIAL_VIEW = {
+  longitude: 77.2090,
+  latitude:  28.6139,
+  zoom:      10,
+  pitch:     30,          // Slight tilt for 3D column effect
+  bearing:   0,
+};
+
+const STYLE_MAP: Record<string, any> = {
+  dark:      darkStyle,
+  satellite: satelliteStyle,
+  light:     lightStyle,
+};
+
+export function MapCanvas() {
+  const { activeLayers, layerOpacity, basemap, timePosition } = useMapStore();
+  const { activeRegion } = useDataStore();
+  const [viewState,       setViewState]       = useState(INITIAL_VIEW);
+  const [clickedLocation, setClickedLocation] = useState<{lat:number,lon:number}|null>(null);
+  const [tooltip,         setTooltip]         = useState<{x:number,y:number,content:any}|null>(null);
+  const deckRef = useRef<any>(null);
+
+  const bbox = `${viewState.longitude - 0.3},${viewState.latitude - 0.3},${viewState.longitude + 0.3},${viewState.latitude + 0.3}`;
+
+  // Fetch layer data from FastAPI
+  const { data: aqData }       = useQuery({ queryKey: ["layer","aq",bbox],       queryFn: () => api.getLayer("aq",       activeRegion, bbox) });
+  const { data: fireData }     = useQuery({ queryKey: ["layer","fire",bbox],      queryFn: () => api.getLayer("fire",     activeRegion, bbox) });
+  const { data: boundaryData } = useQuery({ queryKey: ["boundaries",activeRegion], queryFn: () => api.getZones(activeRegion) });
+  const { data: riskData }     = useQuery({ queryKey: ["risk",activeRegion],      queryFn: () => api.getRiskScores(activeRegion) });
+  const { data: lstBounds }    = useQuery({ queryKey: ["tile-bounds","lst"],      queryFn: () => api.getTileBounds("lst", activeRegion) });
+
+  const riskScoreMap = Object.fromEntries(
+    (riskData?.data?.features ?? []).map((f:any) => [f.properties.zone_id, f.properties.risk_score])
+  );
+
+  const lstTileUrl  = `http://localhost:8000/api/v1/layers/lst/tile?region_id=${activeRegion}`;
+  const ndviTileUrl = `http://localhost:8000/api/v1/layers/ndvi/tile?region_id=${activeRegion}`;
+
+  // Build deck.gl layers
+  const layers = [
+    activeLayers.includes("urban") && buildUrbanDensityLayer(aqData?.data, true, layerOpacity.urban ?? 0.6),
+    activeLayers.includes("lst")   && buildLSTLayer(aqData?.data ?? {type:"FeatureCollection",features:[]}, true, layerOpacity.lst ?? 0.7),
+    activeLayers.includes("ndvi")  && lstBounds?.data && buildNDVILayer(ndviTileUrl, lstBounds.data.bounds, true, layerOpacity.ndvi ?? 0.65),
+    activeLayers.includes("boundaries") && boundaryData?.data && buildBoundaryLayer(boundaryData.data, true, riskScoreMap),
+    activeLayers.includes("aq")    && aqData?.data && buildAQLayer(aqData.data, true, layerOpacity.aq ?? 1.0),
+    activeLayers.includes("fire")  && fireData?.data && buildFireLayer(fireData.data, true, layerOpacity.fire ?? 1.0),
+    activeLayers.includes("stations") && aqData?.data && buildAQStationLayer(aqData.data, true),
+  ].filter(Boolean);
+
+  const onHover = useCallback(({ object, x, y }: any) => {
+    if (object) {
+      setTooltip({ x, y, content: object });
+    } else {
+      setTooltip(null);
+    }
+  }, []);
+
+  const onClick = useCallback(({ coordinate, object }: any) => {
+    if (coordinate) {
+      setClickedLocation({ lon: coordinate[0], lat: coordinate[1] });
+    }
+  }, []);
+
+  return (
+    <div className="relative w-full h-full bg-[#0d1117]">
+      <DeckGL
+        ref={deckRef}
+        viewState={viewState}
+        onViewStateChange={({ viewState: vs }: any) => setViewState(vs)}
+        controller={{ dragPan: true, scrollZoom: true, touchZoom: true }}
+        layers={layers}
+        onHover={onHover}
+        onClick={onClick}
+        getTooltip={({ object }: any) => null}
+      >
+        <Map
+          mapStyle={STYLE_MAP[basemap] ?? darkStyle}
+          attributionControl={false}
+        />
+      </DeckGL>
+
+      {/* Floating tooltip */}
+      <AnimatePresence>
+        {tooltip && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute z-20 pointer-events-none"
+            style={{ left: tooltip.x + 12, top: tooltip.y - 40 }}
+          >
+            <MapTooltip content={tooltip.content} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Location detail panel */}
+      <AnimatePresence>
+        {clickedLocation && (
+          <motion.div
+            initial={{ x: 300, opacity: 0 }}
+            animate={{ x: 0,   opacity: 1 }}
+            exit={{ x: 300,    opacity: 0 }}
+            transition={{ type: "spring", damping: 25 }}
+            className="absolute right-0 top-0 bottom-0 w-72 z-10"
+          >
+            <LocationDetailPanel
+              lat={clickedLocation.lat}
+              lon={clickedLocation.lon}
+              onClose={() => setClickedLocation(null)}
+            />
+          </motion.div>
