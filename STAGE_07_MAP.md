@@ -643,3 +643,132 @@ export function LayersPanel({ onClose }: { onClose: () => void }) {
                     className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                     style={{ backgroundColor: layer.color }}
                   />
+                  <span className="text-xs text-gray-300 font-medium">{layer.label}</span>
+                </div>
+                <Switch
+                  checked={isActive}
+                  onCheckedChange={() => toggleLayer(layer.id)}
+                  className="scale-75"
+                />
+              </div>
+              {isActive && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  className="mt-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500 w-12">Opacity</span>
+                    <Slider
+                      value={[opacity * 100]}
+                      onValueChange={([v]) => setOpacity(layer.id, v / 100)}
+                      max={100} min={10} step={5}
+                      className="flex-1"
+                    />
+                    <span className="text-xs text-gray-500 w-8">{Math.round(opacity * 100)}%</span>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Basemap selector */}
+      <div className="px-3 py-3 border-t border-white/10">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Basemap</span>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          {BASEMAP_OPTIONS.map(opt => (
+            <button
+              key={opt.id}
+              onClick={() => setBasemap(opt.id)}
+              className={`
+                flex flex-col items-center gap-1 p-1.5 rounded-lg border transition-all
+                ${basemap === opt.id
+                  ? "border-blue-400 bg-blue-400/10"
+                  : "border-white/10 hover:border-white/30"
+                }
+              `}
+            >
+              <div className={`w-full h-8 rounded ${opt.preview} border border-white/10`} />
+              <span className="text-xs text-gray-400">{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+```
+
+---
+
+## Step 7 — Create Zustand Map Store
+
+Create `src/store/mapStore.ts`:
+
+```typescript
+import { create } from "zustand";
+
+interface MapStore {
+  activeLayers:  string[];
+  layerOpacity:  Record<string, number>;
+  basemap:       string;
+  timePosition:  number;  // 0 = -7days, 1 = now, 2 = +30days
+  toggleLayer:   (id: string) => void;
+  setOpacity:    (id: string, value: number) => void;
+  setBasemap:    (style: string) => void;
+  setTime:       (value: number) => void;
+}
+
+export const useMapStore = create<MapStore>((set) => ({
+  activeLayers: ["lst", "aq", "ndvi", "fire", "boundaries", "stations"],
+  layerOpacity: {
+    lst:         0.70,
+    aq:          1.00,
+    ndvi:        0.65,
+    fire:        1.00,
+    boundaries:  0.80,
+    urban:       0.50,
+    precipitation: 0.60,
+    risk:        0.70,
+    stations:    1.00,
+  },
+  basemap:      "dark",
+  timePosition: 1,
+
+  toggleLayer: (id) =>
+    set(state => ({
+      activeLayers: state.activeLayers.includes(id)
+        ? state.activeLayers.filter(l => l !== id)
+        : [...state.activeLayers, id]
+    })),
+
+  setOpacity: (id, value) =>
+    set(state => ({ layerOpacity: { ...state.layerOpacity, [id]: value } })),
+
+  setBasemap: (style) => set({ basemap: style }),
+  setTime:    (value) => set({ timePosition: value }),
+}));
+```
+
+---
+
+## Verification Checklist
+
+```
+MapCanvas renders without React errors
+Dark basemap visible (not blank white)
+PMTiles source loads from local file (check network tab - no external tile requests)
+AQ ColumnLayer shows purple 3D columns over AQ station locations
+LST HeatmapLayer shows temperature gradient
+Admin boundary outlines visible as neon blue strokes
+Clicking a map point opens LocationDetailPanel on the right
+Hovering over AQ column shows station tooltip matching mockup style
+LayersPanel toggles turn layers on and off correctly
+Opacity slider changes layer transparency in real time
+Basemap selector switches between dark, satellite, light
+Coordinate bar shows correct lat/lon as map pans
+```
