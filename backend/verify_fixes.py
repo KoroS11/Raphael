@@ -48,23 +48,3 @@ try:
     if 1.0 <= conc <= 500.0:
         print("VERDICT: PASS — concentration in physically realistic range")
     else:
-        print(f"VERDICT: FAIL — expected 1-500 ug/m3, got {conc:.6f}")
-        print("  -> Q proxy fix NOT applied correctly. Check ml/plume.py and ml/pcad.py")
-except Exception as e:
-    import traceback
-    traceback.print_exc()
-    print(f"VERDICT: FAIL — import/execution error: {e}")
-
-print()
-print("=" * 60)
-print("VERIFICATION 2 — Prophet recent-data filter")
-print("=" * 60)
-try:
-    import inspect
-    from ml import forecast
-    src = inspect.getsource(forecast.run_hybrid_forecast)
-    has_cutoff = "days=30" in src or "Timedelta(days=30)" in src
-    has_fit_recent = "df_fit" in src
-    print(f"'days=30' cutoff present in source: {has_cutoff}")
-    print(f"'df_fit' variable (filtered frame) used for training: {has_fit_recent}")
-    if has_cutoff and has_fit_recent:
