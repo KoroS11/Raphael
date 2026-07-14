@@ -26,30 +26,3 @@ except ImportError:
                 class MockRun:
                     @property
                     def info(self):
-                        class MockInfo:
-                            @property
-                            def run_id(self):
-                                return "mock_run_id"
-                        return MockInfo()
-                return MockRun()
-            return mock_func
-    mlflow = MockMLflow()
-
-from prophet import Prophet
-from datetime import datetime, timezone
-from typing import Optional
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-
-try:
-    mlflow.set_tracking_uri(f"http://127.0.0.1:{os.getenv('MLFLOW_PORT', '5000')}")
-except Exception:
-    pass
-
-MIN_OBS = 30       # Minimum observations required to train
-HORIZON_HRS = 48   # Forecast horizon
-
-
-def train_and_forecast(
-    db: Session,
-    zone_id: str,
