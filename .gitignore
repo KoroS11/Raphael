@@ -1,10 +1,81 @@
-# Build and target directories
-src-tauri/binaries/
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# ── Virtual environments ────────────────────────────────
+.venv/
+venv/
+backend/.venv/
+backend/venv/
+ENV/
+
+# ── Node / Frontend ────────────────────────────────────
+node_modules/
+raphael-frontend/node_modules/
+.next/
+out/
+
+# ── Rust / Tauri ────────────────────────────────────────
 src-tauri/target/
+src-tauri/binaries/
+
+# ── Build artifacts ─────────────────────────────────────
 backend/build/
 backend/dist/
+
+# ── Data and databases ─────────────────────────────────
+backend/data/
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ── MLflow ──────────────────────────────────────────────
 backend/mlruns/
-backend/api/__pycache__/
-backend/db/__pycache__/
-backend/ml/__pycache__/
-backend/reports/__pycache__/
+mlruns/
+mlartifacts/
+
+# ── Mage.ai ────────────────────────────────────────────
+backend/raphael_mage/
+
+# ── Environment / secrets ──────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── IDE and editor ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS files ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Test / cache ────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.cover
+
+# ── Notebooks ───────────────────────────────────────────
+backend/notebooks/.ipynb_checkpoints/
+backend/notebooks/models/
+
+# ── Logs ────────────────────────────────────────────────
+*.log
+
+# ── Scratch / temporary ────────────────────────────────
+scratch/

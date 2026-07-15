@@ -3,7 +3,7 @@ import uuid
 import json
 import structlog
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import text
+from sqlalchemy import text, func
 from sqlalchemy.orm import Session
 from db.models import AlertRule, AlertEvent, ZoneGeometry, MLOutput, RawObservation
 from ml.runner import broadcast_sync, _recommend_action
@@ -47,111 +47,128 @@ def get_current_zone_value(db: Session, zone_id: str, layer_type: str) -> tuple:
             return float(latest_risk.value), latest_risk.computed_at
         return None, None
 
-    # Query latest raw observation inside zone geometry
-    sql = text("""
-        SELECT o.value, o.observed_at
+    # Query latest raw observation inside the zone using ST_Within
+    row = db.execute(text("""
+        SELECT AVG(o.value) as val, MAX(o.observed_at) as observed_at
         FROM raw_observations o
         JOIN zone_geometries z ON ST_Within(o.geometry, z.geometry)
         WHERE z.id = :zone_id
           AND o.layer_type = :layer_type
-        ORDER BY o.observed_at DESC
-        LIMIT 1
-    """)
-    res = db.execute(sql, {"zone_id": zone_id, "layer_type": layer_type}).fetchone()
-    if res:
-        # Convert str timestamp to datetime if SQLite returning string
-        obs_time = res[1]
-        if isinstance(obs_time, str):
-            try:
-                obs_time = datetime.fromisoformat(obs_time.replace('Z', '+00:00'))
-            except Exception:
-                obs_time = datetime.now(timezone.utc)
-        return float(res[0]), obs_time
+          AND o.observed_at >= :cutoff
+    """), {
+        "zone_id": zone_id,
+        "layer_type": layer_type,
+        "cutoff": datetime.now(timezone.utc) - timedelta(hours=24)
+    }).fetchone()
+
+    if row and row.val is not None:
+        dt = row.observed_at
+        if isinstance(dt, str):
+            dt = datetime.fromisoformat(dt.replace('Z', '+00:00'))
+        return float(row.val), dt
     return None, None
-
-def get_previous_zone_value(db: Session, zone_id: str, layer_type: str) -> tuple:
-    # Returns (prev_value, timestamp) or (None, None)
-    if layer_type in ["risk_score", "composite"]:
-        latest_risk = db.query(MLOutput).filter(
-            MLOutput.zone_id == zone_id,
-            MLOutput.model_type == "risk_score"
-        ).order_by(MLOutput.computed_at.desc()).offset(1).limit(1).first()
-        if latest_risk:
-            return float(latest_risk.value), latest_risk.computed_at
-        return None, None
-
-    sql = text("""
-        SELECT o.value, o.observed_at
-        FROM raw_observations o
-        JOIN zone_geometries z ON ST_Within(o.geometry, z.geometry)
-        WHERE z.id = :zone_id
-          AND o.layer_type = :layer_type
-        ORDER BY o.observed_at DESC
-        LIMIT 1 OFFSET 1
-    """)
-    res = db.execute(sql, {"zone_id": zone_id, "layer_type": layer_type}).fetchone()
-    if res:
-        obs_time = res[1]
-        if isinstance(obs_time, str):
-            try:
-                obs_time = datetime.fromisoformat(obs_time.replace('Z', '+00:00'))
-            except Exception:
-                obs_time = datetime.now(timezone.utc)
-        return float(res[0]), obs_time
-    return None, None
-
-def get_latest_attribution_cause(db: Session, zone_id: str) -> str:
-    sql = text("""
-        SELECT o.raw_payload
-        FROM raw_observations o
-        JOIN zone_geometries z ON ST_Within(o.geometry, z.geometry)
-        WHERE z.id = :zone_id
-          AND o.is_anomalous = 1
-          AND o.observed_at >= datetime('now', '-24 hours')
-        ORDER BY o.observed_at DESC
-        LIMIT 1
-    """)
-    res = db.execute(sql, {"zone_id": zone_id}).fetchone()
-    if res and res[0]:
-        try:
-            payload = json.loads(res[0]) if isinstance(res[0], str) else res[0]
-            if payload and "cause" in payload:
-                return str(payload["cause"])
-        except Exception:
-            pass
-    return "environmental_factors"
 
 def evaluate_alerts(db: Session, region_id: str):
-    log.info("Starting rule-based alerts evaluation cycle", region_id=region_id)
-    
-    # 1. Ensure table columns exist
     ensure_columns(db)
     
-    # 2. Get active rules
     rules = db.query(AlertRule).filter(AlertRule.is_active == True).all()
-    if not rules:
-        log.info("No active alert rules to evaluate")
-        return
-        
-    # 3. Get all zones in region
-    zones = db.query(ZoneGeometry).filter(ZoneGeometry.region_id == region_id).all()
-    if not zones:
-        log.warning("No zones found for active region to evaluate alerts", region_id=region_id)
-        return
-
+    triggered_now = datetime.now(timezone.utc)
+    
     for rule in rules:
-        target_zones = []
+        rule_fired_any_zone = False
+        
+        # Get zones for this rule
         if rule.zone_id:
-            # Check if this zone is in our active region
-            zone = next((z for z in zones if str(z.id) == str(rule.zone_id)), None)
-            if zone:
-                target_zones.append(zone)
+            zones = db.query(ZoneGeometry).filter(ZoneGeometry.id == rule.zone_id).all()
         else:
-            target_zones = zones
+            zones = db.query(ZoneGeometry).filter(ZoneGeometry.region_id == region_id).all()
             
-        # Get all zone values for this layer in ONE query
-        if rule.layer_type in ["risk_score", "composite"]:
-            zone_values = db.execute(text("""
-                SELECT zone_id, value
-                FROM ml_outputs
-                WHERE model_type = 'risk_score'
+        for zone in zones:
+            val, observed_at = get_current_zone_value(db, zone.id, rule.layer_type)
+            if val is None:
+                continue
+                
+            # Check threshold
+            fired = False
+            if rule.operator == 'gt' and val > rule.threshold:
+                fired = True
+            elif rule.operator == 'lt' and val < rule.threshold:
+                fired = True
+                
+            if fired:
+                rule_fired_any_zone = True
+                
+                # Increment consecutive fires
+                rule.consecutive_fires = (rule.consecutive_fires or 0) + 1
+                db.commit()
+                
+                escalated_severity = rule.severity
+                if rule.consecutive_fires >= 3:
+                    escalated_severity = "critical"
+                    
+                # Get cause and risk info
+                latest_risk = db.query(MLOutput).filter(
+                    MLOutput.zone_id == zone.id,
+                    MLOutput.model_type == "risk_score"
+                ).order_by(MLOutput.computed_at.desc()).first()
+                
+                current_risk = latest_risk.value if latest_risk else 50.0
+                cause = "unknown"
+                if latest_risk and latest_risk.explanation:
+                    try:
+                        expl = json.loads(latest_risk.explanation)
+                        cause = expl.get("cause", "unknown")
+                    except Exception:
+                        cause = latest_risk.explanation
+                if cause == "unknown" or not cause:
+                    cause = f"High {rule.layer_type.upper()} reading"
+                
+                event_id = uuid.uuid4()
+                zone_id_str = str(zone.id)
+                
+                # Create alert event
+                event = AlertEvent(
+                    id=event_id,
+                    rule_id=rule.id,
+                    triggered_at=triggered_now,
+                    observed_value=val,
+                    location=func.ST_Centroid(zone.geometry),
+                    acknowledged=False,
+                    severity=escalated_severity
+                )
+                db.add(event)
+                db.commit()
+                
+                # Generate action recommendation
+                rec = _recommend_action({"risk_score": current_risk}, [{"cause": cause}])
+                recommended_action = rec.get("action", "Enhance monitoring and inspect local sensor nodes.")
+                
+                # WebSocket broadcast payload
+                payload = {
+                    "id": str(event_id),
+                    "rule_name": rule.name,
+                    "zone_name": zone.name,
+                    "zone_id": zone_id_str,
+                    "current_value": val,
+                    "threshold": rule.threshold,
+                    "operator": rule.operator,
+                    "severity": escalated_severity,
+                    "layer_type": rule.layer_type,
+                    "cause": cause,
+                    "recommended_action": recommended_action,
+                    "unit": "ug/m3" if rule.layer_type == "aq" else "°C" if rule.layer_type == "lst" else "",
+                    "timestamp": triggered_now.isoformat()
+                }
+                
+                broadcast_sync({
+                    "type": "alert",
+                    "timestamp": triggered_now.isoformat(),
+                    "payload": payload
+                })
+                
+                log.info("Alert fired successfully!", rule_name=rule.name, zone_name=zone.name, severity=escalated_severity)
+                
+        # If the rule didn't fire in ANY zone during this cycle, reset consecutive fires count
+        if not rule_fired_any_zone:
+            setattr(rule, "consecutive_fires", 0)
+            db.commit()

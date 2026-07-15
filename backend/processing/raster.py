@@ -21,7 +21,7 @@ import uuid
 import numpy as np
 from pathlib import Path
 from datetime import date, datetime, timezone
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple
 
 import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend for server-side rendering
@@ -376,79 +376,211 @@ def clip_to_bbox(src_path: Path, bbox: Tuple[float,float,float,float], dst_path:
     return dst_path
 
 
-def read_modis_hdf4_sinusoidal(hdf_path, sds_name: str, scale_factor: float, add_offset: float = 0.0):
-    """
-    Read a MODIS HDF4 Sinusoidal-grid subdataset directly via pyhdf,
-    bypassing GDAL (which lacks HDF4 support in this environment).
-
-    Returns: (scaled_array, sinusoidal_transform, sinusoidal_crs_wkt)
-    """
-    from pyhdf.SD import SD, SDC
-    import numpy as np
-    from affine import Affine
-    import re
-
-    match = re.search(r'h(\d{2})v(\d{2})', str(hdf_path))
-    if not match:
-        raise ValueError(f"Could not parse MODIS tile h/v from filename: {hdf_path}")
-    h_tile, v_tile = int(match.group(1)), int(match.group(2))
-
-    TILE_SIZE_M = 1111950.5196666666
-    GLOBAL_ORIGIN_X = -20015109.354
-    GLOBAL_ORIGIN_Y = 10007554.677
-
-    tile_ul_x = GLOBAL_ORIGIN_X + h_tile * TILE_SIZE_M
-    tile_ul_y = GLOBAL_ORIGIN_Y - v_tile * TILE_SIZE_M
-
-    hdf = SD(str(hdf_path), SDC.READ)
-    sds = hdf.select(sds_name)
-    raw = sds.get().astype(np.float64)
-
-    fill_value = sds.attributes().get('_FillValue', None)
-    if fill_value is not None:
-        raw[raw == fill_value] = np.nan
-
-    scaled = raw * scale_factor + add_offset
-
-    height, width = scaled.shape
-    pixel_size = TILE_SIZE_M / width
-
-    transform = Affine(pixel_size, 0, tile_ul_x, 0, -pixel_size, tile_ul_y)
-
-    sinusoidal_crs = "+proj=sinu +lon_0=0 +x_0=0 +y_0=0 +R=6371007.181 +units=m +no_defs"
-
-    sds.endaccess()
-    hdf.end()
-
-    return scaled, transform, sinusoidal_crs
-
-
-def process_modis_lst(hdf_path: Path, bbox: Tuple, target_date: date) -> Tuple[Path, Optional[np.ndarray], Optional[Any], Optional[Any]]:
+def process_modis_lst(hdf_path: Path, bbox: Tuple, target_date: date) -> Optional[Path]:
     """
     Process a MODIS MOD11A1 HDF4 file into a colored PNG tile for the LST layer.
     Falls back to mock generation if HDF4 driver is unavailable.
     """
     if not HAS_HDF4 or not HAS_RASTERIO:
-        try:
-            from pyhdf.SD import SD
-            has_pyhdf = True
-        except ImportError:
-            has_pyhdf = False
+        print(f"[raster] HDF4 driver not available (HAS_HDF4={HAS_HDF4}, HAS_RASTERIO={HAS_RASTERIO})")
+        print("[raster] Falling back to mock LST tile generation")
+        return generate_mock_lst_tile(bbox, target_date=target_date)
 
-        if not has_pyhdf or not HAS_RASTERIO:
-            print(f"[raster] HDF4 driver and pyhdf not available. Falling back to mock LST tile generation")
-            return generate_mock_lst_tile(bbox, target_date=target_date), None, None, None
+    try:
+        import subprocess
+        subdataset = f'HDF4_EOS:EOS_GRID:"{hdf_path}":MODIS_Grid_Daily_1km_LST:LST_Day_1km'
+        raw_tif    = hdf_path.parent / f"lst_raw_{target_date}.tif"
 
-        # Real processing via pyhdf sinusoidal reader path
-        try:
-            print("[raster] GDAL lacks HDF4. Using pyhdf sinusoidal reader path for LST.")
-            scaled_array, transform, crs = read_modis_hdf4_sinusoidal(
-                hdf_path, sds_name="LST_Day_1km", scale_factor=0.02, add_offset=-273.15
-            )
-            
-            # Reproject WGS84 bbox coordinates to MODIS Sinusoidal
-            from shapely.ops import transform as shapely_transform
-            from pyproj import Transformer
-            from shapely.geometry import box
-            from rasterio.io import MemoryFile
-            from rasterio.mask import mask as rio_mask
+        subprocess.run([
+            "gdal_translate", "-of", "GTiff", subdataset, str(raw_tif)
+        ], check=True, capture_output=True)
+
+        wgs_tif = hdf_path.parent / f"lst_wgs84_{target_date}.tif"
+        reproject_to_wgs84(raw_tif, wgs_tif)
+
+        clipped_tif = hdf_path.parent / f"lst_clipped_{target_date}.tif"
+        clip_to_bbox(wgs_tif, bbox, clipped_tif)
+
+        with rasterio.open(clipped_tif) as src:
+            data      = src.read(1).astype(float)
+            transform = src.transform
+            crs_val   = src.crs
+
+        # MODIS LST scale factor: multiply by 0.02, subtract 273.15 for Celsius
+        data[data == 0] = np.nan
+        lst_celsius = (data * 0.02) - 273.15
+        lst_celsius[lst_celsius < -100] = np.nan
+
+        lst_colors = [
+            (0.0,  "#0000ff"),
+            (0.33, "#00ffff"),
+            (0.5,  "#ffff00"),
+            (0.75, "#ff8800"),
+            (1.0,  "#ff0000"),
+        ]
+        cmap = mcolors.LinearSegmentedColormap.from_list("lst_raphael", lst_colors)
+
+        array_clipped = np.clip(lst_celsius, 20, 55)
+        normed = (array_clipped - 20) / (55 - 20)
+        normed = np.nan_to_num(normed, nan=0.0)
+        rgba = cmap(normed)
+        rgba[np.isnan(lst_celsius), 3] = 0.0
+        rgba_u8 = (rgba * 255).astype(np.uint8)
+
+        lst_dir = TILES_DIR / "lst"
+        lst_dir.mkdir(parents=True, exist_ok=True)
+        out_path = lst_dir / f"lst_{target_date}.png"
+
+        with rasterio.open(
+            out_path, "w", driver="PNG",
+            height=rgba_u8.shape[0], width=rgba_u8.shape[1],
+            count=4, dtype="uint8", crs=crs_val, transform=transform
+        ) as dst:
+            for band_idx in range(4):
+                dst.write(rgba_u8[:, :, band_idx], band_idx + 1)
+
+        # Cleanup temp files
+        for tmp in [raw_tif, wgs_tif, clipped_tif]:
+            tmp.unlink(missing_ok=True)
+
+        print(f"[raster] LST tile written: {out_path}")
+        return out_path
+
+    except Exception as e:
+        print(f"[raster] LST real processing failed: {e}")
+        print("[raster] Falling back to mock LST tile generation")
+        return generate_mock_lst_tile(bbox, target_date=target_date)
+
+
+def process_modis_ndvi(hdf_path: Path, bbox: Tuple, target_date: date) -> Optional[Path]:
+    """
+    Process MODIS MOD13A2 HDF4 file for NDVI.
+    Falls back to mock generation if HDF4 driver is unavailable.
+    """
+    if not HAS_HDF4 or not HAS_RASTERIO:
+        print(f"[raster] HDF4 driver not available for NDVI")
+        print("[raster] Falling back to mock NDVI tile generation")
+        return generate_mock_ndvi_tile(bbox, target_date=target_date)
+
+    try:
+        import subprocess
+        subdataset = f'HDF4_EOS:EOS_GRID:"{hdf_path}":MOD_Grid_16DAY_1km_VI:1 km 16 days NDVI'
+        raw_tif = hdf_path.parent / f"ndvi_raw_{target_date}.tif"
+        subprocess.run(
+            ["gdal_translate", "-of", "GTiff", subdataset, str(raw_tif)],
+            check=True, capture_output=True
+        )
+        wgs_tif = hdf_path.parent / f"ndvi_wgs84_{target_date}.tif"
+        clipped_tif = hdf_path.parent / f"ndvi_clipped_{target_date}.tif"
+        reproject_to_wgs84(raw_tif, wgs_tif)
+        clip_to_bbox(wgs_tif, bbox, clipped_tif)
+
+        with rasterio.open(clipped_tif) as src:
+            data      = src.read(1).astype(float)
+            transform = src.transform
+            crs_val   = src.crs
+
+        data[data == -3000] = np.nan
+        ndvi = data * 0.0001
+
+        ndvi_dir = TILES_DIR / "ndvi"
+        ndvi_dir.mkdir(parents=True, exist_ok=True)
+        out_path = ndvi_dir / f"ndvi_modis_{target_date}.png"
+
+        ndvi_clipped = np.clip(ndvi, -0.2, 0.8)
+        normed = (ndvi_clipped - (-0.2)) / (0.8 - (-0.2))
+        normed = np.nan_to_num(normed, nan=0.0)
+
+        cmap = plt.get_cmap("YlGn")
+        rgba = cmap(normed)
+        rgba_u8 = (rgba * 255).astype(np.uint8)
+
+        with rasterio.open(
+            out_path, "w", driver="PNG",
+            height=rgba_u8.shape[0], width=rgba_u8.shape[1],
+            count=4, dtype="uint8", crs=crs_val, transform=transform
+        ) as dst:
+            for band_idx in range(4):
+                dst.write(rgba_u8[:, :, band_idx], band_idx + 1)
+
+        for tmp in [raw_tif, wgs_tif, clipped_tif]:
+            tmp.unlink(missing_ok=True)
+
+        print(f"[raster] NDVI tile written: {out_path}")
+        return out_path
+
+    except Exception as e:
+        print(f"[raster] NDVI real processing failed: {e}")
+        print("[raster] Falling back to mock NDVI tile generation")
+        return generate_mock_ndvi_tile(bbox, target_date=target_date)
+
+
+def process_sentinel2_ndvi(tif_path: Path, bbox: Tuple, target_date: date) -> Optional[Path]:
+    """
+    Process a Sentinel-2 GeoTIFF (B04/B08 bands) into NDVI PNG.
+    Falls back to mock generation if rasterio is unavailable.
+    """
+    if not HAS_RASTERIO:
+        print("[raster] Rasterio not available for Sentinel-2 NDVI")
+        return generate_mock_ndvi_tile(bbox, target_date=target_date)
+
+    try:
+        wgs_tif     = tif_path.parent / f"ndvi_wgs84_{target_date}.tif"
+        clipped_tif = tif_path.parent / f"ndvi_clipped_{target_date}.tif"
+
+        reproject_to_wgs84(tif_path, wgs_tif)
+        clip_to_bbox(wgs_tif, bbox, clipped_tif)
+
+        with rasterio.open(clipped_tif) as src:
+            b04 = src.read(1).astype(float)
+            b08 = src.read(2).astype(float)
+            transform = src.transform
+            crs_val = src.crs
+
+        denominator = b08 + b04
+        denominator[denominator == 0] = np.nan
+        ndvi = (b08 - b04) / denominator
+        ndvi = np.clip(ndvi, -1, 1)
+
+        ndvi_dir = TILES_DIR / "ndvi"
+        ndvi_dir.mkdir(parents=True, exist_ok=True)
+        out_path = ndvi_dir / f"ndvi_sentinel_{target_date}.png"
+
+        ndvi_clipped = np.clip(ndvi, -0.2, 0.8)
+        normed = (ndvi_clipped - (-0.2)) / (0.8 - (-0.2))
+        normed = np.nan_to_num(normed, nan=0.0)
+
+        cmap = plt.get_cmap("YlGn")
+        rgba = cmap(normed)
+        rgba_u8 = (rgba * 255).astype(np.uint8)
+
+        with rasterio.open(
+            out_path, "w", driver="PNG",
+            height=rgba_u8.shape[0], width=rgba_u8.shape[1],
+            count=4, dtype="uint8", crs=crs_val, transform=transform
+        ) as dst:
+            for band_idx in range(4):
+                dst.write(rgba_u8[:, :, band_idx], band_idx + 1)
+
+        for tmp in [wgs_tif, clipped_tif]:
+            tmp.unlink(missing_ok=True)
+
+        print(f"[raster] Sentinel-2 NDVI tile written: {out_path}")
+        return out_path
+
+    except Exception as e:
+        print(f"[raster] Sentinel-2 NDVI processing failed: {e}")
+        return generate_mock_ndvi_tile(bbox, target_date=target_date)
+
+
+def get_tile_bounds_wkt(bounds: Tuple[float, float, float, float]) -> str:
+    """
+    Convert a bounding box tuple to WKT POLYGON string with SRID=4326.
+    For inserting tile bounds into the raster_tiles table.
+    """
+    west, south, east, north = bounds
+    return (
+        f"SRID=4326;POLYGON(("
+        f"{west} {south}, {east} {south}, {east} {north}, "
+        f"{west} {north}, {west} {south}))"
+    )

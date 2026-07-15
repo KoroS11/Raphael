@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0-rc",
+  "productName": "Raphael",
+  "version": "0.1.0",
+  "identifier": "com.raphael.geoint",
+  "build": {
+    "frontendDist": "../raphael-frontend/dist/client",
+    "devUrl": "http://localhost:8080",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "cd ../raphael-frontend && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Raphael — Environmental Intelligence Platform",
+        "width": 1400,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "externalBin": [
+      "binaries/raphael-sidecar"
+    ],
+    "resources": {
+      "binaries/_internal": "./_internal"
+    },
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}

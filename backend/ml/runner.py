@@ -18,7 +18,7 @@ import asyncio
 
 # Windows DLL overrides for MKL/OMP and Stan compiler
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-conda_prefix = os.environ.get("CONDA_PREFIX") or r"C:\Users\harsh\anaconda3\envs\raphael-env"
+conda_prefix = os.environ.get("RAPHAEL_CONDA_PREFIX") or os.environ.get("CONDA_PREFIX") or r"C:\Users\harsh\anaconda3\envs\raphael-env"
 lib_bin = os.path.join(conda_prefix, "Library", "bin")
 if os.path.exists(lib_bin) and lib_bin not in os.environ["PATH"]:
     os.environ["PATH"] = lib_bin + os.pathsep + os.environ["PATH"]

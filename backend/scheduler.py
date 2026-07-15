@@ -16,6 +16,44 @@ process alongside the FastAPI server. On Windows, start it in a second
 terminal or wrap in a service manager (e.g. NSSM).
 """
 
+import sys, os
+
+# Windows DLL overrides for MKL/OMP, Stan compiler, and SpatiaLite
+if sys.platform == 'win32':
+    conda_prefix = os.environ.get("RAPHAEL_CONDA_PREFIX") or os.environ.get("CONDA_PREFIX") or r"C:\Users\harsh\anaconda3\envs\raphael-env"
+    lib_bin = os.path.join(conda_prefix, "Library", "bin")
+    if os.path.exists(lib_bin):
+        if lib_bin not in os.environ["PATH"]:
+            os.environ["PATH"] = lib_bin + os.pathsep + os.environ["PATH"]
+        if hasattr(os, 'add_dll_directory'):
+            try:
+                os.add_dll_directory(lib_bin)
+            except Exception:
+                pass
+
+# Monkeypatch Windows SSL default cert loading to bypass ASN1 NOT_ENOUGH_DATA certificate store bug
+import ssl
+orig_load_default_certs = ssl.SSLContext.load_default_certs
+def patched_load_default_certs(self, purpose=ssl.Purpose.SERVER_AUTH):
+    try:
+        return orig_load_default_certs(self, purpose)
+    except Exception:
+        try:
+            import certifi
+            self.load_verify_locations(certifi.where())
+        except Exception:
+            pass
+ssl.SSLContext.load_default_certs = patched_load_default_certs
+
+# Pre-import torch first to resolve Windows OpenMP/MKL DLL collision quirk
+try:
+    import torch
+except Exception:
+    pass
+
+
+
+
 import sys
 import os
 import logging
@@ -115,3 +153,105 @@ def job_intelligence_cycle():
         _safe_run("intelligence_cycle", run_intelligence_cycle, db=db)
     finally:
         db.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# COMBINED HOURLY JOB
+# Runs ingestion first, then the ML cycle.
+# APScheduler runs each job in its own thread so this is sequential-safe.
+# ════════════════════════════════════════════════════════════════════════════
+
+def job_hourly_pipeline():
+    """
+    Combined hourly pipeline: ingest → ML cycle.
+    Ingestion flows are run sequentially so the ML cycle always receives
+    fresh data from the current hour.
+    """
+    log.info("═══ HOURLY PIPELINE START ═══")
+
+    # 1. Ingest fast sources
+    job_openaq()
+    job_waqi()
+    job_iqair()
+    job_openmeteo()
+    job_gdacs()
+
+    # 2. Run intelligence cycle on freshly-ingested data
+    job_intelligence_cycle()
+
+    log.info("═══ HOURLY PIPELINE DONE  ═══")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SCHEDULER SETUP
+# ════════════════════════════════════════════════════════════════════════════
+
+def _on_job_event(event):
+    if event.exception:
+        log.error("Scheduled job %s crashed: %s", event.job_id, event.exception)
+    else:
+        log.debug("Scheduled job %s completed successfully", event.job_id)
+
+
+def build_scheduler() -> BlockingScheduler:
+    scheduler = BlockingScheduler(timezone="UTC")
+
+    # ── Hourly combined pipeline (ingestion + ML) ──────────────────────────
+    scheduler.add_job(
+        job_hourly_pipeline,
+        trigger=IntervalTrigger(hours=1),
+        id="hourly_pipeline",
+        name="Hourly ingestion + ML intelligence cycle",
+        max_instances=1,           # No overlapping runs
+        coalesce=True,             # Skip missed runs (e.g. after sleep)
+        misfire_grace_time=300,    # Tolerate up to 5 min latency
+    )
+
+    # ── Every 3h — FIRMS fire detection (heavier, less frequent) ──────────
+    scheduler.add_job(
+        job_firms,
+        trigger=IntervalTrigger(hours=3),
+        id="firms_3h",
+        name="FIRMS fire detection (3-hourly)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
+    )
+
+    # ── Daily — MODIS LST (once per day is sufficient) ─────────────────────
+    scheduler.add_job(
+        job_lst_modis,
+        trigger=IntervalTrigger(hours=24),
+        id="modis_lst_daily",
+        name="MODIS LST daily ingestion",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
+    scheduler.add_listener(_on_job_event, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
+    return scheduler
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ════════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    log.info("Raphael background scheduler starting…")
+    log.info("  • Hourly pipeline  : OpenAQ + WAQI + IQAir + OpenMeteo + GDACS → ML Cycle")
+    log.info("  • Every 3h         : FIRMS fire detection")
+    log.info("  • Every 24h        : MODIS LST")
+    log.info("Press Ctrl-C to stop.\n")
+
+    scheduler = build_scheduler()
+
+    try:
+        # Run all ingestion + ML once immediately on startup, then follow the schedule
+        log.info("Running initial pipeline on startup…")
+        job_hourly_pipeline()
+        job_firms()
+
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Scheduler stopped by user.")

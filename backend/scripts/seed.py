@@ -2,7 +2,6 @@ import sys
 import os
 import uuid
 from datetime import datetime, timezone
-from passlib.context import CryptContext
 from shapely.geometry import box, MultiPolygon
 from geoalchemy2.shape import from_shape
 
@@ -15,8 +14,9 @@ else:
 
 from db.connection import SessionLocal, engine, IS_SPATIALITE
 from db.models import User, Source, Region, ZoneGeometry
+from api.auth import hash_password
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# passlib is replaced by api.auth.hash_password to avoid bcrypt v4 compatibility bug
 
 # ---------------------------------------------------------------------------
 # Pune zone definitions — centroid (lat, lon) and approximate rectangular
@@ -98,7 +98,7 @@ def seed_demo(fresh: bool = False):
             admin = User(
                 id=_make_id(),
                 username="admin",
-                password_hash=pwd_context.hash("raphael_admin"),
+                password_hash=hash_password("raphael_admin"),
                 display_name="Administrator",
                 role="admin",
                 organization="Raphael"
